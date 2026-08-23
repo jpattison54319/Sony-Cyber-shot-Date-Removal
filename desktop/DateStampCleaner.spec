@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_submodules
@@ -16,6 +17,34 @@ if not model_path.is_file():
     raise SystemExit("Run desktop/scripts/fetch_model.py before packaging.")
 
 icon_path = desktop_root / "assets" / ("app-icon.icns" if sys.platform == "darwin" else "app-icon.ico")
+license_data = [
+    (str(project_root / "LICENSE"), "licenses/DateStampCleaner"),
+    (str(project_root / "THIRD_PARTY_NOTICES.md"), "licenses/DateStampCleaner"),
+    (str(project_root / "reference" / "python-workflow" / "LICENSE"), "licenses/OriginalWorkflow"),
+    (str(desktop_root / "licenses" / "Apache-2.0.txt"), "licenses/Shared"),
+]
+for package_name in (
+    "numpy",
+    "Pillow",
+    "scipy",
+    "opencv-python-headless",
+    "PySide6-Essentials",
+    "shiboken6",
+    "torch",
+    "simple-lama-inpainting",
+    "PyInstaller",
+):
+    try:
+        package = distribution(package_name)
+    except PackageNotFoundError:
+        continue
+    for relative in package.files or ():
+        if not relative.name.lower().startswith(("license", "copying", "notice")):
+            continue
+        source = Path(package.locate_file(relative))
+        if source.is_file():
+            license_data.append((str(source), f"licenses/{package_name}/{relative.parent.name}"))
+
 hidden_imports = [
     "bulk_timestamp_pipeline",
     *collect_submodules("simple_lama_inpainting"),
@@ -25,7 +54,7 @@ analysis = Analysis(
     [str(desktop_root / "run_app.py")],
     pathex=[str(desktop_root), str(workflow_root)],
     binaries=[],
-    datas=[(str(model_path), "models")],
+    datas=[(str(model_path), "models"), *license_data],
     hiddenimports=hidden_imports,
     hookspath=[],
     hooksconfig={},
