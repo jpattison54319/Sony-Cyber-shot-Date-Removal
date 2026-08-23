@@ -1,0 +1,37 @@
+{
+  "name": "date-stamp-cleaner",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "audit:privacy": "node scripts/privacy-audit.mjs",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "client-zip": "2.5.0",
+    "hash-wasm": "4.12.0",
+    "lucide-react": "1.33.0",
+    "next": "16.3.2",
+    "onnxruntime-web": "1.27.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.3.2",
+    "typescript": "^5.9.0",
+    "vitest": "4.1.11"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  }
+}

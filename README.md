@@ -1,2 +1,77 @@
-# Sony-Cyber-shot-Date-Removal
-Removes dates from photos added by Sony cybershot cameras. 
+# Date Stamp Cleaner
+
+Remove the orange `MM DD YYYY` date added by many Sony Cyber-shot cameras—entirely in your browser.
+
+The public website has no photo-upload endpoint, account system, analytics, or photo database. A camera-specific detector finds the date, LaMa reconstructs only the saved binary mask, and every output is reopened and audited before a lossless PNG is offered for download.
+
+## What users get
+
+- One photo → one automatically downloaded, verified PNG.
+- Multiple photos → one PNG-only ZIP, streamed directly to disk in supported desktop browsers.
+- Failed or uncertain detection → no edited output for that photo.
+- Exact decoded-RGB preservation outside the detected timestamp mask.
+- Sequential processing for bounded memory use across batches of up to 200 photos.
+
+The hidden scene pixels were covered by the camera timestamp and cannot be historically recovered. The model reconstructs that small region; the exactness guarantee applies only outside the recorded mask.
+
+## Privacy boundary
+
+Photos are decoded and processed in a temporary Web Worker. They are not transmitted, persisted in browser storage, used for training, or logged. Selected file references remain available only in the open tab until the list is cleared or the page is closed.
+
+On first use, the browser downloads the public LaMa ONNX model from a commit-pinned Hugging Face URL. Only that verified model may be cached locally; processing still works if browser storage is unavailable. The model is approximately 198 MiB and must match SHA-256:
+
+```text
+4b187e02a5e1eeab97a21ae39a3e780bc9943d64dd90dbaa9ffd73da12da52f0
+```
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full data flow and threat boundary.
+
+## Browser support
+
+- Current desktop Chrome or Edge: recommended; WebGPU acceleration and streamed large-batch ZIP output.
+- Safari and Firefox: ONNX WebAssembly compatibility mode; slower and limited to 25-photo in-memory ZIPs.
+- Inputs: JPG, JPEG, and opaque PNG; 30 MB and 40 megapixels per file; 200 files per selection.
+- Outputs: lossless, orientation-normalized RGB PNG.
+
+## Development
+
+Requires Node.js 20.19 or newer.
+
+```bash
+npm ci
+npm run dev
+```
+
+The build bundles the required ONNX Runtime WebAssembly asset. The large LaMa model is intentionally not part of the Git repository or Vercel build.
+
+Validation:
+
+```bash
+npm test
+npm run lint
+npm run typecheck
+npm run audit:privacy
+npm run build
+```
+
+The committed automated fixtures are generated arrays with no people or personal imagery. The browser port has not been validated against the original private family archive, and this repository does not claim that it has.
+
+## Deploying on Vercel
+
+Import `jpattison54319/Sony-Cyber-shot-Date-Removal` as a new Vercel project. The framework is detected as Next.js and exports a static site with no Functions or API routes.
+
+Optionally set `NEXT_PUBLIC_SITE_URL` to the final production origin so canonical and social metadata use your custom domain. No runtime secrets are required.
+
+## Project map
+
+- `workers/processor.worker.ts` — private browser decoding, model loading, reconstruction, PNG export, and verification.
+- `lib/detector.ts` — TypeScript port of the audited Sony orange-date detector.
+- `components/cleaner-app.tsx` — accessible single/bulk workflow and local download handling.
+- `reference/python-workflow/` — unchanged supplied Python workflow retained for audit provenance; never bundled into the site.
+- `tests/` — synthetic detector, filename, pixel-boundary, ZIP, and 162-item regression checks.
+
+## Provenance and licensing
+
+The original workflow is MIT licensed. LaMa is Apache-2.0 licensed and its model weights are hosted separately. Runtime and UI dependency notices are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+Sony and Cyber-shot are trademarks of their respective owner. This project is independent and uses the names only to describe compatible camera timestamps.

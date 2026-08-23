@@ -1,0 +1,11 @@
+.git
+.venv*
+.torch-cache
+__pycache__
+*.pyc
+*.jpg
+*.jpeg
+*.png
+*.zip
+output*
+
