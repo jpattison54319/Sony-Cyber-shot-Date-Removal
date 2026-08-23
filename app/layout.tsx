@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
+import { resolveMetadataBase } from "@/lib/site-url";
+
 import "./globals.css";
 
 export const metadata: Metadata = {
-  metadataBase: new URL(
-    process.env.NEXT_PUBLIC_SITE_URL ?? "https://sony-cyber-shot-date-removal.vercel.app",
-  ),
+  metadataBase: resolveMetadataBase(process.env.VERCEL_PROJECT_PRODUCTION_URL),
   title: "Date Stamp Cleaner",
   description:
     "Remove orange camera date stamps privately. Every photo is processed on your device.",

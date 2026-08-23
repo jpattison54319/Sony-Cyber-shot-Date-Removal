@@ -35,7 +35,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full data flow and threat boundar
 
 ## Development
 
-Requires Node.js 20.19 or newer.
+Requires Node.js 24.
 
 ```bash
 npm ci
@@ -60,7 +60,7 @@ The committed automated fixtures are generated arrays with no people or personal
 
 Import `jpattison54319/Sony-Cyber-shot-Date-Removal` as a new Vercel project. The framework is detected as Next.js and exports a static site with no Functions or API routes.
 
-Optionally set `NEXT_PUBLIC_SITE_URL` to the final production origin so canonical and social metadata use your custom domain. No runtime secrets are required.
+No domain variable or runtime secret is required. Vercel automatically supplies `VERCEL_PROJECT_PRODUCTION_URL`; canonical and social metadata use that production domain, including a custom domain when one is attached.
 
 ## Project map
 

@@ -6,4 +6,3 @@ public/ort/
 *.log
 *.tsbuildinfo
 .env*
-!.env.example
