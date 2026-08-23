@@ -32,6 +32,8 @@ from date_stamp_cleaner.engine import EngineConfigurationError, prepare_engine
 
 APP_NAME = "Date Stamp Cleaner"
 MAX_PHOTOS = 500
+ROW_DETAIL_ROLE = int(Qt.ItemDataRole.UserRole)
+ROW_STATUS_ROLE = ROW_DETAIL_ROLE + 1
 
 
 def _format_bytes(size: int) -> str:
@@ -70,6 +72,7 @@ class PhotoTable(QTableWidget):
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.setAlternatingRowColors(True)
         self.setShowGrid(False)
         self.setAcceptDrops(True)
         self.setDragDropMode(QAbstractItemView.DragDropMode.DropOnly)
@@ -227,8 +230,28 @@ class MainWindow(QMainWindow):
         self.table = PhotoTable()
         self.table.files_dropped.connect(self.add_photos)
         self.table.itemSelectionChanged.connect(self._refresh_controls)
+        self.table.itemSelectionChanged.connect(self._show_selected_detail)
+        self.table.cellClicked.connect(self._show_clicked_detail)
         self.table.setMinimumHeight(230)
         card_layout.addWidget(self.table, 1)
+
+        self.detail_panel = QFrame()
+        self.detail_panel.setObjectName("detailPanel")
+        self.detail_panel.setProperty("kind", "info")
+        self.detail_panel.setAccessibleName("Photo processing details")
+        detail_layout = QVBoxLayout(self.detail_panel)
+        detail_layout.setContentsMargins(14, 11, 14, 12)
+        detail_layout.setSpacing(3)
+        self.detail_title = QLabel()
+        self.detail_title.setObjectName("detailTitle")
+        self.detail_body = QLabel()
+        self.detail_body.setObjectName("detailBody")
+        self.detail_body.setWordWrap(True)
+        self.detail_body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        detail_layout.addWidget(self.detail_title)
+        detail_layout.addWidget(self.detail_body)
+        self.detail_panel.hide()
+        card_layout.addWidget(self.detail_panel)
 
         destination = QFrame()
         destination.setObjectName("destination")
@@ -300,9 +323,18 @@ class MainWindow(QMainWindow):
             QLabel#trustItem { color: #3f5f4f; font-size: 12px; font-weight: 650; }
             QFrame#card { background: #fffdf7; border: 1px solid #d9d5c8; border-radius: 18px; }
             QLabel#sectionLabel, QLabel#smallLabel { color: #a94d08; font-size: 10px; font-weight: 800; letter-spacing: 1px; }
-            QTableWidget { background: #fbf9f2; alternate-background-color: #f7f4ec; border: 1px dashed #bdb8a9; border-radius: 12px; selection-background-color: #f8e5cf; selection-color: #171814; outline: none; }
-            QTableWidget::item { border-bottom: 1px solid #ebe7dd; padding: 9px; }
+            QTableWidget { color: #171814; background: #fbf9f2; alternate-background-color: #f7f4ec; border: 1px dashed #bdb8a9; border-radius: 12px; selection-background-color: #f8e5cf; selection-color: #171814; outline: none; }
+            QTableWidget::item { color: #171814; border-bottom: 1px solid #ebe7dd; padding: 9px; }
+            QTableWidget::item:selected { color: #171814; background: #f8e5cf; }
+            QTableWidget::item:hover { color: #171814; background: #f3eadf; }
             QHeaderView::section { color: #77786f; background: #eeebe1; border: none; border-bottom: 1px solid #d9d5c8; padding: 8px; font-size: 10px; font-weight: 700; }
+            QFrame#detailPanel { background: #f8f6ef; border: 1px solid #ded9cc; border-radius: 10px; }
+            QFrame#detailPanel[kind="error"] { background: #fff4f0; border-color: #e8c3bd; }
+            QFrame#detailPanel[kind="success"] { background: #eef7f1; border-color: #c7dfcf; }
+            QLabel#detailTitle { color: #23251f; border: none; font-size: 12px; font-weight: 750; }
+            QLabel#detailBody { color: #5d5f56; border: none; font-size: 12px; }
+            QFrame#detailPanel[kind="error"] QLabel#detailTitle { color: #92352d; }
+            QFrame#detailPanel[kind="success"] QLabel#detailTitle { color: #315f4c; }
             QFrame#destination { background: #f8f6ef; border: 1px solid #e6e1d5; border-radius: 10px; }
             QLabel#pathLabel { color: #4d4f47; font-size: 12px; }
             QLabel#statusLabel { color: #67695f; font-size: 12px; }
@@ -356,7 +388,10 @@ class MainWindow(QMainWindow):
             name_item.setToolTip(str(resolved))
             self.table.setItem(row, 0, name_item)
             self.table.setItem(row, 1, QTableWidgetItem(_format_bytes(resolved.stat().st_size)))
-            self.table.setItem(row, 2, QTableWidgetItem("Ready"))
+            status_item = QTableWidgetItem("Ready")
+            status_item.setData(ROW_STATUS_ROLE, "ready")
+            status_item.setData(ROW_DETAIL_ROLE, "Ready to process.")
+            self.table.setItem(row, 2, status_item)
         if rejected:
             self.status_label.setText(f"{rejected} duplicate or unsupported file(s) were skipped.")
         self._refresh_controls()
@@ -369,6 +404,7 @@ class MainWindow(QMainWindow):
         for row in rows:
             self.table.removeRow(row)
             self.sources.pop(row)
+        self._hide_detail()
         self._refresh_controls()
 
     @Slot()
@@ -380,6 +416,7 @@ class MainWindow(QMainWindow):
         self.last_output_root = None
         self.open_button.hide()
         self.progress.setValue(0)
+        self._hide_detail()
         self._refresh_controls()
 
     @Slot()
@@ -402,9 +439,13 @@ class MainWindow(QMainWindow):
         self.progress.setValue(0)
         self.progress.show()
         self.open_button.hide()
+        self._hide_detail()
         self.status_label.setText("Checking the included model…")
         for row in range(self.table.rowCount()):
-            self.table.item(row, 2).setText("Waiting")
+            item = self.table.item(row, 2)
+            item.setText("Waiting")
+            item.setData(ROW_STATUS_ROLE, "waiting")
+            item.setData(ROW_DETAIL_ROLE, "Waiting to process.")
 
         thread = QThread(self)
         worker = ProcessingWorker(self.sources.copy(), output_root)
@@ -434,8 +475,15 @@ class MainWindow(QMainWindow):
         }.get(status, status.title())
         item = self.table.item(index, 2)
         item.setText(label)
+        item.setData(ROW_STATUS_ROLE, status)
+        item.setData(ROW_DETAIL_ROLE, detail)
         item.setToolTip(detail)
         self.status_label.setText(detail)
+        if status == "failed":
+            name = self.table.item(index, 0).text()
+            self._show_detail(f"{name} failed", detail, "error")
+        elif self.table.currentRow() == index:
+            self._show_selected_detail()
 
     @Slot(int, int)
     def _set_progress(self, completed: int, total: int) -> None:
@@ -448,18 +496,36 @@ class MainWindow(QMainWindow):
         succeeded = sum(getattr(result, "status", None) == "succeeded" for result in result_list)
         failed = sum(getattr(result, "status", None) == "failed" for result in result_list)
         canceled = sum(getattr(result, "status", None) == "canceled" for result in result_list)
+        failed_results = [result for result in result_list if getattr(result, "status", None) == "failed"]
+        failure_messages = {
+            str(getattr(result, "error", "")).strip()
+            for result in failed_results
+            if str(getattr(result, "error", "")).strip()
+        }
+        if failed and len(failure_messages) == 1:
+            noun = "photo" if failed == 1 else "photos"
+            self._show_detail(f"{failed} {noun} failed", failure_messages.pop(), "error")
+        elif failed:
+            self._show_detail(
+                f"{failed} photos failed",
+                "Select a failed photo to see what happened.",
+                "error",
+            )
+        else:
+            self._hide_detail()
         if succeeded:
             self.status_label.setText(f"{succeeded} verified · {failed} failed · {canceled} canceled")
             self.open_button.show()
         elif canceled:
             self.status_label.setText("Processing stopped. No originals were changed.")
         else:
-            self.status_label.setText("No photos were cleaned. Select a failed row for details.")
+            self.status_label.setText("No photos were cleaned. See the error below the photo list.")
         self.progress.setValue(100 if succeeded + failed + canceled == len(self.sources) else self.progress.value())
 
     @Slot(str)
     def _processing_failed(self, message: str) -> None:
         self.status_label.setText(message)
+        self._show_detail("Processing stopped", message, "error")
         QMessageBox.critical(self, "Date Stamp Cleaner stopped", message)
 
     @Slot()
@@ -490,6 +556,44 @@ class MainWindow(QMainWindow):
         target = self.last_output_root / "images"
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
 
+    @Slot()
+    def _show_selected_detail(self) -> None:
+        row = self.table.currentRow()
+        if row < 0 or not self.table.selectedItems():
+            return
+        self._show_row_detail(row)
+
+    @Slot(int, int)
+    def _show_clicked_detail(self, row: int, _column: int) -> None:
+        self._show_row_detail(row)
+
+    def _show_row_detail(self, row: int) -> None:
+        status_item = self.table.item(row, 2)
+        name_item = self.table.item(row, 0)
+        if status_item is None or name_item is None:
+            return
+        detail = str(status_item.data(ROW_DETAIL_ROLE) or "").strip()
+        status = str(status_item.data(ROW_STATUS_ROLE) or "").strip()
+        if not detail:
+            return
+        kind = "error" if status == "failed" else "success" if status == "succeeded" else "info"
+        self._show_detail(f"{name_item.text()} · {status_item.text()}", detail, kind)
+
+    def _show_detail(self, title: str, message: str, kind: str) -> None:
+        self.detail_title.setText(title)
+        self.detail_body.setText(message)
+        self.detail_panel.setAccessibleDescription(f"{title}. {message}")
+        if self.detail_panel.property("kind") != kind:
+            self.detail_panel.setProperty("kind", kind)
+            self.detail_panel.style().unpolish(self.detail_panel)
+            self.detail_panel.style().polish(self.detail_panel)
+        self.detail_panel.show()
+
+    def _hide_detail(self) -> None:
+        self.detail_panel.hide()
+        self.detail_title.clear()
+        self.detail_body.clear()
+
     def _refresh_controls(self) -> None:
         running = self.worker is not None
         self.count_label.setText(f"PHOTOS · {len(self.sources)}")
@@ -503,6 +607,7 @@ class MainWindow(QMainWindow):
         self.stop_button.setEnabled(running)
         if not self.sources and not running:
             self.status_label.setText("Choose JPG or PNG photos to begin.")
+            self._hide_detail()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self.worker is None:
