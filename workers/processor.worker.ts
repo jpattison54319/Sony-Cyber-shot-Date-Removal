@@ -218,6 +218,10 @@ async function createModelSession(
 
   modelPromise = (async () => {
     ort.env.logLevel = "warning";
+    ort.env.wasm.wasmPaths = {
+      wasm: "/ort/ort-wasm-simd-threaded.asyncify.wasm",
+    };
+    ort.env.wasm.proxy = false;
     ort.env.wasm.numThreads = self.crossOriginIsolated
       ? Math.max(1, Math.min(4, navigator.hardwareConcurrency || 1))
       : 1;

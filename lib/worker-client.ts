@@ -29,7 +29,7 @@ export class ProcessorClient {
   private closed = false;
 
   constructor() {
-    this.worker = new Worker(new URL("../workers/processor.worker.ts", import.meta.url), {
+    this.worker = new Worker("/ort/processor.worker.js", {
       type: "module",
       name: "date-stamp-processor",
     });

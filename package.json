@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "node scripts/build-worker.mjs",
     "dev": "next dev",
+    "prebuild": "node scripts/build-worker.mjs",
     "build": "next build",
     "start": "next start",
     "audit:privacy": "node scripts/privacy-audit.mjs",
@@ -26,6 +28,7 @@
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "esbuild": "^0.28.2",
     "eslint": "9.39.5",
     "eslint-config-next": "16.3.2",
     "typescript": "^5.9.0",

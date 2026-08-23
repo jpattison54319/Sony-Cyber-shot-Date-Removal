@@ -229,15 +229,26 @@ export function CleanerApp() {
 
   const prepareModel = useCallback(() => {
     if (modelReadyRef.current || modelPreparationRef.current) return;
-    const processor = processorRef.current ?? new ProcessorClient();
-    processorRef.current = processor;
-    const preparation = processor.prepare(
-      `prepare-${crypto.randomUUID()}`,
-      true,
-      handleRuntimeProgress,
-    );
-    modelPreparationRef.current = preparation;
     setRuntimeStatus((current) => ({ ...current, modelState: "checking", modelProgress: 0 }));
+
+    let processor: ProcessorClient;
+    let preparation: Promise<ExecutionProvider>;
+    try {
+      processor = processorRef.current ?? new ProcessorClient();
+      processorRef.current = processor;
+      preparation = processor.prepare(
+        `prepare-${crypto.randomUUID()}`,
+        true,
+        handleRuntimeProgress,
+      );
+      modelPreparationRef.current = preparation;
+    } catch {
+      processorRef.current = null;
+      modelReadyRef.current = false;
+      setRuntimeStatus({ modelState: "error", modelProgress: 0, provider: null });
+      setNotice("The local processor could not start. Refresh and try again.");
+      return;
+    }
 
     void preparation
       .then((provider) => {
@@ -250,6 +261,7 @@ export function CleanerApp() {
         if (!(error instanceof ProcessingError)) processorRef.current = null;
         modelReadyRef.current = false;
         setRuntimeStatus({ modelState: "error", modelProgress: 0, provider: null });
+        setNotice(error instanceof Error ? error.message : "The restoration model could not be prepared.");
       })
       .finally(() => {
         if (modelPreparationRef.current === preparation) modelPreparationRef.current = null;
@@ -286,7 +298,7 @@ export function CleanerApp() {
           id: fileId(file),
           file,
           status: "ready",
-          detail: "Ready to process",
+          detail: "Photo selected · Ready",
           progress: 0,
         });
       }
@@ -297,7 +309,7 @@ export function CleanerApp() {
       if (errors.length > 0) setNotice(errors.slice(0, 3).join(" "));
       if (next.length > 0) {
         setQueue((current) => [...current, ...next]);
-        prepareModel();
+        window.setTimeout(prepareModel, 0);
       }
     },
     [batchLimit, prepareModel, queue.length, resetPreview],
@@ -766,18 +778,18 @@ export function CleanerApp() {
             </div>
           )}
 
+          {notice && (
+            <div className={`notice ${completed > 0 ? "notice-success" : ""}`} role="status" aria-live="polite">
+              {completed > 0 ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
+              <span>{notice}</span>
+            </div>
+          )}
+
           <div className="privacy-row">
             <ShieldCheck size={18} />
             <p>Photos never leave this device.</p>
           </div>
         </section>
-
-        {notice && (
-          <div className="notice" role="status" aria-live="polite">
-            {completed > 0 ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
-            <span>{notice}</span>
-          </div>
-        )}
 
       </section>
 
