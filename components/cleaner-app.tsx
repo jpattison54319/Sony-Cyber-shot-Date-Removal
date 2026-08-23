@@ -36,6 +36,10 @@ import {
   reserveUniqueOutputName,
   validateFile,
 } from "@/lib/file-rules";
+import {
+  getInferenceProfileSnapshot,
+  getServerInferenceProfileSnapshot,
+} from "@/lib/inference-profile";
 import type { ExecutionProvider, ProcessedImage, ProcessingStage, WorkerResponse } from "@/lib/processing-types";
 import { createSafeId } from "@/lib/safe-id";
 import { ProcessingError, ProcessorClient } from "@/lib/worker-client";
@@ -206,6 +210,11 @@ export function CleanerApp() {
     getWebGpuSnapshot,
     getServerWebGpuSnapshot,
   );
+  const inferenceProfile = useSyncExternalStore(
+    subscribeToStaticCapability,
+    getInferenceProfileSnapshot,
+    getServerInferenceProfileSnapshot,
+  );
   const supportsStreamedZip = useSyncExternalStore(
     subscribeToStaticCapability,
     getStreamedZipSnapshot,
@@ -273,8 +282,8 @@ export function CleanerApp() {
       processor = processorRef.current ?? new ProcessorClient();
       processorRef.current = processor;
       preparation = processor.prepare(
-        `prepare-${crypto.randomUUID()}`,
-        true,
+        createSafeId("prepare"),
+        inferenceProfile,
         handleRuntimeProgress,
       );
       modelPreparationRef.current = preparation;
@@ -308,7 +317,7 @@ export function CleanerApp() {
       .finally(() => {
         if (modelPreparationRef.current === preparation) modelPreparationRef.current = null;
       });
-  }, [handleRuntimeProgress]);
+  }, [handleRuntimeProgress, inferenceProfile]);
 
   const cancelPendingModelPreparation = useCallback(() => {
     if (!modelPreparationRef.current) return;
@@ -493,8 +502,10 @@ export function CleanerApp() {
   const modeLabel = runtimeStatus.provider === "webgpu"
     ? "WebGPU"
     : runtimeStatus.provider === "wasm"
-      ? "Compatibility"
-      : hasWebGpu
+      ? inferenceProfile === "mobile-safe" ? "Mobile-safe WASM" : "Compatibility"
+      : inferenceProfile === "mobile-safe"
+        ? "Mobile safe"
+        : hasWebGpu
         ? "WebGPU available"
         : "Compatibility";
   const modelPercent = Math.round(runtimeStatus.modelProgress * 100);
@@ -517,7 +528,7 @@ export function CleanerApp() {
         setRuntimeStatus((current) => ({ ...current, provider: null }));
       }
       try {
-        const result = await processorRef.current.process(item.id, item.file, true, (message) => {
+        const result = await processorRef.current.process(item.id, item.file, inferenceProfile, (message) => {
           lastStage = message.stage;
           if (message.modelVerified || message.provider) verifiedDuringAttempt = true;
           handleRuntimeProgress(message);
@@ -565,7 +576,7 @@ export function CleanerApp() {
         return { status, reason: message };
       }
     },
-    [handleRuntimeProgress, updateItem],
+    [handleRuntimeProgress, inferenceProfile, updateItem],
   );
 
   const beginProcessing = useCallback(async () => {
@@ -792,7 +803,9 @@ export function CleanerApp() {
           </div>
 
           <div className="runtime-strip" role="group" aria-label="Local processing readiness">
-            <div className={`runtime-item mode-${runtimeStatus.provider ?? (hasWebGpu ? "webgpu" : "wasm")}`}>
+            <div className={`runtime-item mode-${runtimeStatus.provider ?? (
+              inferenceProfile === "mobile-safe" ? "wasm" : hasWebGpu ? "webgpu" : "wasm"
+            )}`}>
               <span className="runtime-icon" aria-hidden="true"><Cpu size={18} /></span>
               <span className="runtime-copy">
                 <span className="runtime-label">MODE</span>

@@ -13,7 +13,7 @@ The only runtime network request beyond static application assets is the public 
 3. Decoded dimensions and resource limits are checked before processing continues.
 4. The detector searches only the lower/right camera-date region and requires eight aligned orange glyph components with the supplied color, scale, position, baseline, and spacing rules.
 5. Selected glyph cores are dilated by the supplied scale-derived radius.
-6. A padded local crop and its mask are passed to the fixed 1024×1024 LaMa ONNX graph. WebGPU is preferred; WebAssembly is the compatibility provider.
+6. A padded local crop and its mask are passed to the model's fixed 512×512 LaMa ONNX graph. Desktop-class browsers prefer WebGPU and otherwise use bounded WebAssembly threading. Mobile browsers use single-threaded WebAssembly to reduce peak memory; this changes the runtime profile, not the model input or final image dimensions.
 7. Generated RGB values are copied only where the original-resolution binary mask is true.
 8. The result is encoded as PNG, reopened, fully decoded, and compared with the canonical input.
 9. Any changed pixel outside the mask or any redetected eight-glyph sequence rejects the output.

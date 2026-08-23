@@ -1,6 +1,7 @@
 import type { DetectionReport } from "./detector";
 
 export type ExecutionProvider = "webgpu" | "wasm";
+export type InferenceProfile = "standard" | "mobile-safe";
 
 export interface ProcessingReport extends DetectionReport {
   canonicalDimensions: [number, number];
@@ -24,8 +25,8 @@ export interface ProcessedImage {
 }
 
 export type WorkerRequest =
-  | { type: "process"; id: string; file: File; preferWebGpu: boolean }
-  | { type: "prepare-model"; id: string; preferWebGpu: boolean }
+  | { type: "process"; id: string; file: File; profile: InferenceProfile }
+  | { type: "prepare-model"; id: string; profile: InferenceProfile }
   | { type: "clear-model-cache" };
 
 export type ProcessingStage =

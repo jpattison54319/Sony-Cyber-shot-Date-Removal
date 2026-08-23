@@ -31,11 +31,11 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full data flow and threat boundar
 
 - Current desktop Chrome or Edge: recommended; WebGPU acceleration and streamed large-batch ZIP output.
 - Safari and Firefox: ONNX WebAssembly compatibility mode; slower and limited to 25-photo in-memory ZIPs.
-- Mobile and other non-streaming browsers: native multi-select picker with touch-sized controls and a 25-photo ZIP limit.
+- Mobile browsers: native multi-select picker, a 25-photo ZIP limit, and a memory-safe single-threaded WASM profile.
 - Inputs: JPG, JPEG, and opaque PNG; 30 MB and 40 megapixels per file; up to 200 files with streamed ZIP support.
 - Outputs: lossless, orientation-normalized RGB PNG.
 
-The workspace shows capability before processing and the provider actually selected afterward. It also shows model download or cache-check progress and only reports `Integrity verified` after the pinned SHA-256 matches.
+The workspace shows the mobile-safe, compatibility, or WebGPU mode before processing and the provider actually selected afterward. It also shows model download or cache-check progress and only reports `Verified` after the pinned SHA-256 matches.
 
 ## Development
 

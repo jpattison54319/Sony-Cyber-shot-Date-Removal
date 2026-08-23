@@ -1,4 +1,9 @@
-import type { ExecutionProvider, ProcessedImage, WorkerResponse } from "./processing-types";
+import type {
+  ExecutionProvider,
+  InferenceProfile,
+  ProcessedImage,
+  WorkerResponse,
+} from "./processing-types";
 
 interface PendingRequest {
   resolve: (result: ProcessedImage) => void;
@@ -40,25 +45,25 @@ export class ProcessorClient {
   process(
     id: string,
     file: File,
-    preferWebGpu: boolean,
+    profile: InferenceProfile,
     onProgress: PendingRequest["onProgress"],
   ): Promise<ProcessedImage> {
     if (this.closed) return Promise.reject(new Error("The private image processor must be restarted."));
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject, onProgress });
-      this.worker.postMessage({ type: "process", id, file, preferWebGpu });
+      this.worker.postMessage({ type: "process", id, file, profile });
     });
   }
 
   prepare(
     id: string,
-    preferWebGpu: boolean,
+    profile: InferenceProfile,
     onProgress: PendingPreparation["onProgress"],
   ): Promise<ExecutionProvider> {
     if (this.closed) return Promise.reject(new Error("The private image processor must be restarted."));
     return new Promise((resolve, reject) => {
       this.preparations.set(id, { resolve, reject, onProgress });
-      this.worker.postMessage({ type: "prepare-model", id, preferWebGpu });
+      this.worker.postMessage({ type: "prepare-model", id, profile });
     });
   }
 

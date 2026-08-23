@@ -41,10 +41,10 @@ describe("model preparation client", () => {
     vi.stubGlobal("Worker", FakeWorker);
     const client = new ProcessorClient();
     const onProgress = vi.fn();
-    const preparation = client.prepare("model-1", true, onProgress);
+    const preparation = client.prepare("model-1", "mobile-safe", onProgress);
 
     expect(FakeWorker.latest.posted).toEqual([
-      { type: "prepare-model", id: "model-1", preferWebGpu: true },
+      { type: "prepare-model", id: "model-1", profile: "mobile-safe" },
     ]);
 
     const progress: WorkerResponse = {
@@ -63,7 +63,7 @@ describe("model preparation client", () => {
   it("cancels an in-flight preparation when the worker is terminated", async () => {
     vi.stubGlobal("Worker", FakeWorker);
     const client = new ProcessorClient();
-    const preparation = client.prepare("model-2", true, vi.fn());
+    const preparation = client.prepare("model-2", "standard", vi.fn());
 
     client.terminate("Stopped");
 

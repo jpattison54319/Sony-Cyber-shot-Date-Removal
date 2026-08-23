@@ -5,9 +5,11 @@ import * as ort from "onnxruntime-web/webgpu";
 
 import { DetectionError, detectTimestamp } from "@/lib/detector";
 import { MAX_PIXELS, safeOutputName } from "@/lib/file-rules";
+import { MODEL_INPUT_SIZE } from "@/lib/inference-profile";
 import { auditPixelChanges } from "@/lib/pixel-audit";
 import type {
   ExecutionProvider,
+  InferenceProfile,
   ProcessedImage,
   ProcessingReport,
   ProcessingStage,
@@ -21,7 +23,7 @@ const MODEL_REVISION = "ea7cb42eca4643e71ba363771b3f6c0a8c1b1404";
 const MODEL_SHA256 = "4b187e02a5e1eeab97a21ae39a3e780bc9943d64dd90dbaa9ffd73da12da52f0";
 const MODEL_URL = `https://huggingface.co/Carve/LaMa-ONNX/resolve/${MODEL_REVISION}/lama_fp32.onnx`;
 const MODEL_CACHE = "date-stamp-cleaner-model-v1";
-const MODEL_SIZE = 1024;
+const MODEL_SIZE = MODEL_INPUT_SIZE;
 
 let session: ort.InferenceSession | null = null;
 let activeProvider: ExecutionProvider | null = null;
@@ -209,10 +211,10 @@ async function loadVerifiedModel(id: string): Promise<Uint8Array> {
 
 async function createModelSession(
   id: string,
-  preferWebGpu: boolean,
+  profile: InferenceProfile,
 ): Promise<{ session: ort.InferenceSession; provider: ExecutionProvider }> {
   const gpuAvailable = Boolean((navigator as Navigator & { gpu?: unknown }).gpu);
-  const requestedProvider: ExecutionProvider = preferWebGpu && gpuAvailable ? "webgpu" : "wasm";
+  const requestedProvider: ExecutionProvider = profile === "standard" && gpuAvailable ? "webgpu" : "wasm";
   if (session && activeProvider) return { session, provider: activeProvider };
   if (modelPromise) return modelPromise;
 
@@ -222,9 +224,11 @@ async function createModelSession(
       wasm: "/ort/ort-wasm-simd-threaded.asyncify.wasm",
     };
     ort.env.wasm.proxy = false;
-    ort.env.wasm.numThreads = self.crossOriginIsolated
-      ? Math.max(1, Math.min(4, navigator.hardwareConcurrency || 1))
-      : 1;
+    ort.env.wasm.numThreads = profile === "mobile-safe"
+      ? 1
+      : self.crossOriginIsolated
+        ? Math.max(1, Math.min(4, navigator.hardwareConcurrency || 1))
+        : 1;
     const model = await loadVerifiedModel(id);
 
     if (requestedProvider === "webgpu") {
@@ -380,7 +384,7 @@ async function reconstruct(
   mask: Uint8Array,
   maskBox: [number, number, number, number],
   radius: number,
-  preferWebGpu: boolean,
+  profile: InferenceProfile,
 ): Promise<{ final: Uint8ClampedArray; provider: ExecutionProvider }> {
   const padding = Math.max(80, Math.round(radius * 18));
   const expanded: [number, number, number, number] = [
@@ -398,7 +402,7 @@ async function reconstruct(
   }
 
   const prepared = prepareModelInput(crop.rgb, cropMask, crop.width, crop.height);
-  const model = await createModelSession(id, preferWebGpu);
+  const model = await createModelSession(id, profile);
   progress(id, "reconstruct", 0.1, `Reconstructing locally with ${model.provider.toUpperCase()}`, {
     modelVerified: true,
     provider: model.provider,
@@ -451,7 +455,7 @@ async function encodePng(rgb: Uint8ClampedArray, width: number, height: number):
   return canvas.convertToBlob({ type: "image/png" });
 }
 
-async function processImage(id: string, file: File, preferWebGpu: boolean): Promise<ProcessedImage> {
+async function processImage(id: string, file: File, profile: InferenceProfile): Promise<ProcessedImage> {
   progress(id, "decode", 0.1, "Decoding privately on this device");
   const inputHashPromise = sha256Blob(file);
   const decoded = await decodeBlob(file);
@@ -469,7 +473,7 @@ async function processImage(id: string, file: File, preferWebGpu: boolean): Prom
     detection.mask,
     detection.report.maskBboxInclusive,
     detection.report.maskRadius,
-    preferWebGpu,
+    profile,
   );
 
   progress(id, "encode", 0.2, "Writing a lossless PNG");
@@ -528,7 +532,7 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
 
   if (request.type === "prepare-model") {
     try {
-      const model = await createModelSession(request.id, request.preferWebGpu);
+      const model = await createModelSession(request.id, request.profile);
       post({ type: "prepared", id: request.id, provider: model.provider });
     } catch (error) {
       const message = error instanceof Error ? error.message : "The restoration model could not be prepared.";
@@ -538,7 +542,7 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
   }
 
   try {
-    const result = await processImage(request.id, request.file, request.preferWebGpu);
+    const result = await processImage(request.id, request.file, request.profile);
     post({ type: "result", id: request.id, result });
   } catch (error) {
     const message = error instanceof Error ? error.message : "This photo could not be processed.";
