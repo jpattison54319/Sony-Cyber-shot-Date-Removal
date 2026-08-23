@@ -18,8 +18,13 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
       - run: npm ci --ignore-scripts
       - run: npm test
+      - run: PYTHONPATH=desktop python -m unittest discover -s desktop/tests -v
+      - run: python -m compileall -q desktop/date_stamp_cleaner desktop/run_app.py
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run audit:privacy

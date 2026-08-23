@@ -1,5 +1,5 @@
-import { CleanerApp } from "@/components/cleaner-app";
+import { DownloadApp } from "@/components/download-app";
 
 export default function Home() {
-  return <CleanerApp />;
+  return <DownloadApp />;
 }

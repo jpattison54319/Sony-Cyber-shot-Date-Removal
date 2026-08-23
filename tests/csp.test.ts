@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 // @ts-expect-error -- plain ESM audit helper shared with the build script.
-import { auditDocument, auditRuntimeNeeds, integrityOf } from "../scripts/csp-policy.mjs";
+import { auditDocument, auditStaticBoundary, integrityOf } from "../scripts/csp-policy.mjs";
 
 const shippedPolicy: string = await (async () => {
   const vercel = JSON.parse(
@@ -26,24 +26,26 @@ describe("shipped deployment policy", () => {
     expect(failures).toEqual([]);
   });
 
-  it("lets inline style attributes size the progress bars", () => {
+  it("allows inline styles used by the static export", () => {
     expect(auditDocument(shippedPolicy, styleAttribute, "index.html").failures).toEqual([]);
   });
 
-  it("keeps the worker, WebAssembly, and pinned model host reachable", () => {
-    expect(auditRuntimeNeeds(shippedPolicy)).toEqual([]);
+  it("disables runtime connections, workers, and WebAssembly evaluation", () => {
+    expect(auditStaticBoundary(shippedPolicy)).toEqual([]);
   });
 
   it("still forbids remote script origins", () => {
     expect(shippedPolicy).toContain("object-src 'none'");
     expect(shippedPolicy).toContain("base-uri 'self'");
     expect(shippedPolicy).toContain("frame-ancestors 'none'");
-    expect(shippedPolicy).toContain("connect-src 'self' https://huggingface.co https://*.hf.co");
+    expect(shippedPolicy).toContain("connect-src 'none'");
+    expect(shippedPolicy).toContain("worker-src 'none'");
+    expect(shippedPolicy).not.toContain("wasm-unsafe-eval");
   });
 });
 
 describe("policy audit", () => {
-  const strict = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; worker-src 'self'; connect-src 'self' https://huggingface.co";
+  const strict = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'none'; connect-src 'none'";
 
   it("reports a policy that would break hydration", () => {
     const { failures } = auditDocument(strict, hydrationScript, "index.html");
@@ -74,15 +76,20 @@ describe("policy audit", () => {
     expect(auditDocument(noStyleAttributes, styleAttribute, "index.html").failures).toHaveLength(1);
   });
 
-  it("reports missing runtime allowances", () => {
-    const failures: string[] = auditRuntimeNeeds("default-src 'self'; script-src 'self'");
-    expect(failures).toHaveLength(2);
-    expect(failures.some((failure) => failure.includes("wasm-unsafe-eval"))).toBe(true);
-    expect(failures.some((failure) => failure.includes("restoration model"))).toBe(true);
+  it("reports a widened runtime surface", () => {
+    const failures: string[] = auditStaticBoundary(
+      "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'",
+    );
+    expect(failures).toHaveLength(3);
+    expect(failures.some((failure) => failure.includes("runtime network"))).toBe(true);
+    expect(failures.some((failure) => failure.includes("desktop app"))).toBe(true);
+    expect(failures.some((failure) => failure.includes("WebAssembly"))).toBe(true);
   });
 
-  it("resolves worker-src through its default-src fallback, as browsers do", () => {
-    expect(auditRuntimeNeeds("default-src 'none'; script-src 'wasm-unsafe-eval'; connect-src https://huggingface.co"))
-      .toEqual(["worker-src does not allow 'self', so the private processing worker cannot start."]);
+  it("reports missing explicit connection and worker denial", () => {
+    const failures: string[] = auditStaticBoundary("default-src 'self'; script-src 'self'");
+    expect(failures).toHaveLength(2);
+    expect(failures.some((failure) => failure.includes("connect-src"))).toBe(true);
+    expect(failures.some((failure) => failure.includes("worker-src"))).toBe(true);
   });
 });

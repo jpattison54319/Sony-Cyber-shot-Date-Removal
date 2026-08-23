@@ -105,18 +105,18 @@ export function auditDocument(policy, html, name = "document") {
   return { failures, scriptCount };
 }
 
-/** Checks the policy allowances this application needs regardless of markup. */
-export function auditRuntimeNeeds(policy) {
+/** Checks that the download-only site has no runtime network or worker surface. */
+export function auditStaticBoundary(policy) {
   const directives = parsePolicy(policy);
   const failures = [];
-  if (!sourcesFor(directives, "worker-src", "child-src").includes("'self'")) {
-    failures.push("worker-src does not allow 'self', so the private processing worker cannot start.");
+  if (!sourcesFor(directives, "connect-src", "default-src").includes("'none'")) {
+    failures.push("connect-src must be 'none' because the installer site has no runtime network requests.");
   }
-  if (!sourcesFor(directives, "script-src", "default-src").includes("'wasm-unsafe-eval'")) {
-    failures.push("script-src does not allow 'wasm-unsafe-eval', so ONNX Runtime cannot compile its WebAssembly.");
+  if (!sourcesFor(directives, "worker-src", "child-src").includes("'none'")) {
+    failures.push("worker-src must be 'none' because photo processing moved to the desktop app.");
   }
-  if (!sourcesFor(directives, "connect-src", "default-src").includes("https://huggingface.co")) {
-    failures.push("connect-src does not allow the pinned model host, so the restoration model cannot download.");
+  if (sourcesFor(directives, "script-src", "default-src").includes("'wasm-unsafe-eval'")) {
+    failures.push("script-src still permits WebAssembly evaluation that the installer site does not need.");
   }
   return failures;
 }

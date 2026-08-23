@@ -1,0 +1,4 @@
+# Preserve the versions used by the original workflow without allowing their
+# stale/over-broad dependency metadata to replace the audited NumPy/Pillow pins.
+opencv-python-headless==4.12.0.88
+simple-lama-inpainting==0.1.2

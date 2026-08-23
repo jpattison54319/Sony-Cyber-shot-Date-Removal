@@ -6,3 +6,10 @@ public/ort/
 *.log
 *.tsbuildinfo
 .env*
+__pycache__/
+*.py[cod]
+desktop/build/
+desktop/dist/
+desktop/release/
+desktop/models/
+desktop/assets/*.iconset/

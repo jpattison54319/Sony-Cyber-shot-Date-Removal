@@ -1,38 +1,62 @@
-# Browser architecture and invariants
+# Desktop architecture and invariants
 
-## Static boundary
+## Product boundary
 
-The production build is a static Next.js export. There are no route handlers, Server Actions, Vercel Functions, databases, object stores, analytics collectors, or authentication services.
+The Vercel deployment is a static installer page. It does not accept photos or
+run the model. Its Content Security Policy disables runtime connections and
+workers, and the repository contains no application API route.
 
-The only runtime network request beyond static application assets is the public LaMa model download. Its URL is pinned to a specific Hugging Face revision, its SHA-256 is checked incrementally before inference, and a mismatch fails closed. The verified model response—not any photo—may be stored in the browser Cache API when storage is available.
+The installed PySide6 application is the entire photo-facing product. It has no
+network client, telemetry, account, cloud storage, or update service. The fixed
+TorchScript LaMa model is included in each installer and must match the expected
+SHA-256 before the original workflow can load.
 
 ## Photo data flow
 
-1. The user grants access to local JPG, JPEG, or opaque PNG files.
-2. A dedicated Web Worker decodes each file with EXIF orientation applied.
-3. Decoded dimensions and resource limits are checked before processing continues.
-4. The detector searches only the lower/right camera-date region and requires eight aligned orange glyph components with the supplied color, scale, position, baseline, and spacing rules.
-5. Selected glyph cores are dilated by the supplied scale-derived radius.
-6. A padded local crop and its mask are passed to the pinned model's fixed 1024×1024 LaMa ONNX graph. Desktop-class browsers prefer WebGPU and otherwise use bounded WebAssembly threading. Mobile browsers use single-threaded WebAssembly to reduce runtime overhead; this changes the execution profile, not the model input or final image dimensions.
-7. Generated RGB values are copied only where the original-resolution binary mask is true.
-8. The result is encoded as PNG, reopened, fully decoded, and compared with the canonical input.
-9. Any changed pixel outside the mask or any redetected eight-glyph sequence rejects the output.
-10. Successful single results download directly. Successful batch results are emitted sequentially into a PNG-only ZIP.
+1. The user drags JPG, JPEG, or PNG files into the app or chooses them with the
+   operating-system multi-select picker.
+2. The app creates a new, non-overwriting run folder under the selected
+   destination.
+3. One worker thread loads the unchanged
+   `reference/python-workflow/bulk_timestamp_pipeline.py` entry point and reuses
+   its single local LaMa session.
+4. Photos are processed sequentially to bound memory use.
+5. The original detector requires eight aligned orange glyph components and
+   produces a scale-derived timestamp mask.
+6. LaMa receives only a padded local crop and its mask. Generated pixels are
+   copied back only where the original-resolution mask is true.
+7. The workflow writes a lossless PNG, reopens it, and compares the complete
+   decoded RGB array with the orientation-normalized input.
+8. A result is retained only when every outside-mask pixel is unchanged and no
+   eight-glyph timestamp can be redetected.
 
-## Security and resource controls
+Every run contains `images/`, `masks/`, `reports/`, and `manifest.json`.
+Originals are never renamed, moved, or overwritten. Duplicate basenames receive
+numeric suffixes. A failed photo does not abort the rest of the batch, and its
+partial artifacts are removed.
 
-- Allowed inputs: JPG, JPEG, and opaque PNG only.
-- Limits: 30 MB, 40 megapixels, 200 selected files, and 500,000 orange-core candidates.
-- User filenames are reduced to their final path component, normalized, stripped of control/path characters, and capped before being used in downloads.
-- Files are processed sequentially; the model session is reused rather than reloaded for every photo.
-- Large Chromium batches stream to a user-authorized file handle instead of accumulating all outputs in memory.
-- Colliding source basenames receive deterministic numeric suffixes so no PNG is silently overwritten in a batch ZIP.
-- Canceling terminates the worker, releases its model session, and stops the next file from starting.
-- Content Security Policy restricts script origins, workers, image sources, and connections; cross-origin isolation enables bounded WASM threading where available.
-- The policy allows inline scripts because a static export hands its React payload to the browser through inline `self.__next_f.push(...)` tags that cannot carry a build-independent nonce or hash. Blocking them leaves a page that renders its server HTML and never becomes interactive, which is indistinguishable from a working site until a control is tapped. `npm run build` therefore fails through `scripts/csp-audit.mjs` if the shipped policy cannot run the exported HTML. Script origins, `object-src`, `base-uri`, `form-action`, `frame-ancestors`, and the `connect-src` allowlist remain closed, and the site renders no user-supplied or remote markup.
+## Resource and failure behavior
+
+- One model session is reused; photos do not process in parallel.
+- The UI remains responsive because processing runs on a worker thread.
+- Cancel means “stop after the current photo”; the active native inference call
+  is allowed to finish safely.
+- A missing or altered model fails closed before any photo processing begins.
+- A disk, decode, detector, inference, or audit error fails only that photo when
+  possible and is recorded in the local manifest.
+- Packaging is native per target OS because PyInstaller is not a cross-compiler.
+
+## Release boundary
+
+GitHub Actions builds a `.dmg` on Apple Silicon, a separate `.dmg` on Intel, and
+a Windows x64 setup `.exe`. Tagged releases also publish `SHA256SUMS.txt`.
+Release signing credentials are intentionally not stored in source; trustworthy
+public distribution requires configuring Apple notarization and Windows code
+signing in the release environment.
 
 ## Honest validation boundary
 
-The detector thresholds and mask rules are ported from the supplied Python source. Automated tests use synthetic, person-free RGB arrays only. The original private archive was explicitly excluded from development and has not been used to establish browser-port visual parity.
-
-Different JPEG decoders, inference providers, and floating-point kernels can produce different reconstructed masked pixels. The outside-mask decoded-RGB invariant is re-established independently for every browser output and does not depend on model parity.
+The app invokes the original supplied Python workflow with `method="lama"`; it
+is not a TypeScript or ONNX port. Automated repository fixtures are synthetic
+and contain no personal imagery. Actual archive-level visual parity still
+requires testing the packaged builds with representative original camera files.

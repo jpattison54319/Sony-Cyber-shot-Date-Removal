@@ -8,7 +8,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { auditDocument, auditRuntimeNeeds } from "./csp-policy.mjs";
+import { auditDocument, auditStaticBoundary } from "./csp-policy.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const outputDirectory = join(root, "out");
@@ -37,7 +37,7 @@ if (pages.length === 0) {
   throw new Error("No exported HTML found in out/. Run `npm run build` before auditing the policy.");
 }
 
-const failures = [...auditRuntimeNeeds(policy)];
+const failures = [...auditStaticBoundary(policy)];
 let inlineScripts = 0;
 
 for (const page of pages) {
