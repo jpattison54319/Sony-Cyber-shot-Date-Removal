@@ -8,12 +8,14 @@
     "dev": "next dev",
     "prebuild": "node scripts/build-worker.mjs",
     "build": "next build",
+    "postbuild": "node scripts/csp-audit.mjs",
     "start": "next start",
     "audit:privacy": "node scripts/privacy-audit.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "audit:csp": "node scripts/csp-audit.mjs"
   },
   "dependencies": {
     "client-zip": "2.5.0",

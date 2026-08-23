@@ -16,6 +16,7 @@ import {
   FileImage,
   ImagePlus,
   Images,
+  Info,
   LoaderCircle,
   LockKeyhole,
   RefreshCw,
@@ -36,9 +37,23 @@ import {
   validateFile,
 } from "@/lib/file-rules";
 import type { ExecutionProvider, ProcessedImage, ProcessingStage, WorkerResponse } from "@/lib/processing-types";
+import { createSafeId } from "@/lib/safe-id";
 import { ProcessingError, ProcessorClient } from "@/lib/worker-client";
 
 type QueueStatus = "ready" | "processing" | "complete" | "skipped" | "failed" | "canceled";
+
+type NoticeTone = "info" | "success" | "error";
+
+interface Notice {
+  tone: NoticeTone;
+  text: string;
+}
+
+type ItemOutcome =
+  | { status: "done"; result: ProcessedImage }
+  | { status: "skipped"; reason: string }
+  | { status: "failed"; reason: string }
+  | { status: "canceled" };
 
 interface QueueItem {
   id: string;
@@ -98,25 +113,46 @@ const STAGE_LABELS: Record<ProcessingStage, string> = {
   verify: "Verifying result",
 };
 
+// Mobile Safari and iOS Chrome routinely refuse a programmatic download that is
+// not attached to a tap, and they never report the refusal. The caller always
+// keeps the blob and an explicit save button, so a blocked attempt here is a
+// silent no-op rather than a lost result.
 function triggerDownload(blob: Blob, name: string): void {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = name;
-  link.rel = "noopener";
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  try {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    link.rel = "noopener";
+    link.target = "_self";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch {
+    // The visible download button remains the reliable path.
+  }
+}
+
+// Browsers surface a dropped model download as a bare "Failed to fetch", which
+// tells a phone user nothing about what to do next.
+function describeFailure(error: unknown, fallback: string): string {
+  const raw = error instanceof Error ? error.message.trim() : "";
+  if (!raw || /^(failed to fetch|load failed|network ?error)/i.test(raw)) return fallback;
+  return raw;
+}
+
+function downloadLabel(name: string): string {
+  return name.toLowerCase().endsWith(".zip") ? "Download ZIP" : "Download PNG";
+}
+
+function countPhrase(count: number, singular: string, plural: string): string {
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
-}
-
-function fileId(file: File): string {
-  return `${crypto.randomUUID()}-${file.name}-${file.size}-${file.lastModified}`;
 }
 
 function subscribeToStaticCapability(): () => void {
@@ -157,7 +193,7 @@ export function CleanerApp() {
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
   const [preview, setPreview] = useState<PreviewPair | null>(null);
   const [lastDownload, setLastDownload] = useState<{ blob: Blob; name: string } | null>(null);
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus>({
@@ -246,7 +282,7 @@ export function CleanerApp() {
       processorRef.current = null;
       modelReadyRef.current = false;
       setRuntimeStatus({ modelState: "error", modelProgress: 0, provider: null });
-      setNotice("The local processor could not start. Refresh and try again.");
+      setNotice({ tone: "error", text: "The local processor could not start. Refresh and try again." });
       return;
     }
 
@@ -261,7 +297,13 @@ export function CleanerApp() {
         if (!(error instanceof ProcessingError)) processorRef.current = null;
         modelReadyRef.current = false;
         setRuntimeStatus({ modelState: "error", modelProgress: 0, provider: null });
-        setNotice(error instanceof Error ? error.message : "The restoration model could not be prepared.");
+        setNotice({
+          tone: "error",
+          text: describeFailure(
+            error,
+            "The restoration model could not be downloaded. Check your connection; it is retried when you start.",
+          ),
+        });
       })
       .finally(() => {
         if (modelPreparationRef.current === preparation) modelPreparationRef.current = null;
@@ -280,22 +322,39 @@ export function CleanerApp() {
 
   const addFiles = useCallback(
     (incoming: File[]) => {
-      setNotice(null);
       resetPreview();
       setLastDownload(null);
-      const available = Math.max(0, batchLimit - queue.length);
-      const accepted = incoming.slice(0, available);
-      const next: QueueItem[] = [];
-      const errors: string[] = [];
 
-      for (const file of accepted) {
+      // A picker that hands back an empty list still has to say so. Reporting
+      // nothing is what made a failed mobile selection look like a dead page.
+      if (incoming.length === 0) {
+        setNotice({
+          tone: "error",
+          text: "No photos came back from the picker. Choose them again, or pick a few at a time.",
+        });
+        return;
+      }
+
+      const available = Math.max(0, batchLimit - queue.length);
+      const next: QueueItem[] = [];
+      const rejected: string[] = [];
+      let overflow = 0;
+
+      // Every accepted photo gets its own row even when two selections look
+      // identical: iOS reuses generic names for transcoded photos, so treating
+      // a repeat as a duplicate would silently drop a photo the user chose.
+      for (const file of incoming) {
         const validation = validateFile(file);
         if (validation) {
-          errors.push(`${file.name}: ${validation}`);
+          rejected.push(`${file.name}: ${validation}`);
+          continue;
+        }
+        if (next.length >= available) {
+          overflow += 1;
           continue;
         }
         next.push({
-          id: fileId(file),
+          id: createSafeId("photo"),
           file,
           status: "ready",
           detail: "Photo selected · Ready",
@@ -303,23 +362,55 @@ export function CleanerApp() {
         });
       }
 
-      if (incoming.length > available) {
-        errors.push(`This browser can add ${batchLimit} photos per batch; ${available} slots were available.`);
-      }
-      if (errors.length > 0) setNotice(errors.slice(0, 3).join(" "));
       if (next.length > 0) {
         setQueue((current) => [...current, ...next]);
         window.setTimeout(prepareModel, 0);
       }
+
+      const parts: string[] = [];
+      if (next.length > 0) parts.push(`${countPhrase(next.length, "photo", "photos")} added.`);
+      if (overflow > 0) {
+        parts.push(`${countPhrase(overflow, "photo did", "photos did")} not fit the ${batchLimit}-photo limit for this browser.`);
+      }
+      parts.push(...rejected.slice(0, 2));
+      if (rejected.length > 2) parts.push(`${countPhrase(rejected.length - 2, "other file", "other files")} could not be used.`);
+
+      const skippedCount = overflow + rejected.length;
+      setNotice({
+        tone: next.length === 0 ? "error" : skippedCount > 0 ? "info" : "success",
+        text: parts.join(" ") || "Those files could not be used. Choose a JPG, JPEG, or PNG photo.",
+      });
     },
-    [batchLimit, prepareModel, queue.length, resetPreview],
+    [batchLimit, prepareModel, queue, resetPreview],
   );
 
+  // The picker is the one step the user cannot see into, so every failure in
+  // this handler has to surface instead of ending the event silently.
   const handleFileSelection = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
-      const files = Array.from(event.currentTarget.files ?? []);
-      event.currentTarget.value = "";
-      addFiles(files);
+      const input = event.currentTarget;
+      let files: File[] = [];
+      try {
+        files = Array.from(input.files ?? []);
+      } catch {
+        files = [];
+      }
+      try {
+        // Clearing the value lets the same photo be chosen again later.
+        input.value = "";
+      } catch {
+        // Some mobile browsers refuse the reset; the selection still stands.
+      }
+      try {
+        addFiles(files);
+      } catch (error) {
+        setNotice({
+          tone: "error",
+          text: error instanceof Error
+            ? `Those photos could not be added: ${error.message}`
+            : "Those photos could not be added. Reload the page and try again.",
+        });
+      }
     },
     [addFiles],
   );
@@ -359,7 +450,10 @@ export function CleanerApp() {
       setIsDragging(false);
       if (isRunning) return;
       if (!canAddFiles) {
-        setNotice(`This browser supports ${batchLimit} photos per batch. Clear the list to start another.`);
+        setNotice({
+          tone: "info",
+          text: `This browser supports ${batchLimit} photos per batch. Clear the list to start another.`,
+        });
         return;
       }
       addFiles(Array.from(event.dataTransfer.files));
@@ -412,8 +506,8 @@ export function CleanerApp() {
   } satisfies Record<ModelState, string>)[runtimeStatus.modelState];
 
   const processOne = useCallback(
-    async (item: QueueItem): Promise<ProcessedImage | null> => {
-      if (canceledRef.current) return null;
+    async (item: QueueItem): Promise<ItemOutcome> => {
+      if (canceledRef.current) return { status: "canceled" };
       let lastStage: ProcessingStage | null = null;
       let verifiedDuringAttempt = false;
       updateItem(item.id, { status: "processing", detail: "Starting…", progress: 1 });
@@ -446,13 +540,18 @@ export function CleanerApp() {
           modelProgress: 1,
           provider: result.report.executionProvider,
         });
-        return result;
+        return { status: "done", result };
       } catch (error) {
         if (canceledRef.current) {
           updateItem(item.id, { status: "canceled", detail: "Canceled", progress: 0 });
-          return null;
+          return { status: "canceled" };
         }
-        const message = error instanceof Error ? error.message : "This photo could not be processed.";
+        const message = describeFailure(
+          error,
+          lastStage === "model-download"
+            ? "The restoration model could not be downloaded. Check your connection and try again."
+            : "This photo could not be processed.",
+        );
         if (lastStage === "model-download" && !verifiedDuringAttempt) {
           setRuntimeStatus((current) => ({
             ...current,
@@ -461,12 +560,9 @@ export function CleanerApp() {
             provider: null,
           }));
         }
-        updateItem(item.id, {
-          status: error instanceof ProcessingError && error.code === "not-found" ? "skipped" : "failed",
-          detail: message,
-          progress: 0,
-        });
-        return null;
+        const status = error instanceof ProcessingError && error.code === "not-found" ? "skipped" : "failed";
+        updateItem(item.id, { status, detail: message, progress: 0 });
+        return { status, reason: message };
       }
     },
     [handleRuntimeProgress, updateItem],
@@ -485,11 +581,21 @@ export function CleanerApp() {
         });
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") {
-          setNotice("Nothing was changed. Choose Remove date stamps when you are ready.");
+          setNotice({ tone: "info", text: "Nothing was changed. Choose Remove date stamps when you are ready." });
           return;
         }
-        setNotice("The ZIP save location could not be opened. Check your browser permissions and try again.");
-        return;
+        // Streaming to a chosen file is a convenience, not a requirement. When
+        // the picker is blocked by permissions, keep going with an in-memory
+        // archive for any batch small enough to hold.
+        if (readyItems.length > FALLBACK_BATCH_FILES) {
+          setNotice({
+            tone: "error",
+            text: `The ZIP save location could not be opened, and ${readyItems.length} photos exceeds the `
+              + `${FALLBACK_BATCH_FILES} this browser can package in memory. Remove some and try again.`,
+          });
+          return;
+        }
+        bulkSaveHandle = null;
       }
     }
     setNotice(null);
@@ -502,8 +608,10 @@ export function CleanerApp() {
 
     try {
       if (readyItems.length === 1) {
-        const result = await processOne(readyItems[0]);
-        if (result && !canceledRef.current) {
+        const outcome = await processOne(readyItems[0]);
+        if (canceledRef.current) return;
+        if (outcome.status === "done") {
+          const { result } = outcome;
           const nextPreview: PreviewPair = {
             beforeUrl: URL.createObjectURL(readyItems[0].file),
             afterUrl: URL.createObjectURL(result.blob),
@@ -515,7 +623,16 @@ export function CleanerApp() {
           setPreview(nextPreview);
           setLastDownload({ blob: result.blob, name: result.outputName });
           triggerDownload(result.blob, result.outputName);
-          setNotice("Your verified PNG download has started.");
+          setNotice({
+            tone: "success",
+            text: "Your verified PNG is ready. If the download did not start, use Download PNG below.",
+          });
+        } else if (outcome.status !== "canceled") {
+          // Never end a run without saying what happened.
+          setNotice({
+            tone: outcome.status === "skipped" ? "info" : "error",
+            text: `${outcome.reason} That photo was left untouched, so there is nothing to download.`,
+          });
         }
       } else {
         const canStreamToDisk = bulkSaveHandle !== null;
@@ -525,41 +642,65 @@ export function CleanerApp() {
           );
         }
 
+        let cleaned = 0;
+        let untouched = 0;
         const outputs = async function* () {
           const usedOutputNames = new Set<string>();
           for (const item of readyItems) {
             if (canceledRef.current) return;
-            const result = await processOne(item);
-            if (result) {
+            const outcome = await processOne(item);
+            if (outcome.status === "done") {
+              cleaned += 1;
               yield {
-                name: reserveUniqueOutputName(result.outputName, usedOutputNames),
-                input: result.blob,
-                size: result.blob.size,
+                name: reserveUniqueOutputName(outcome.result.outputName, usedOutputNames),
+                input: outcome.result.blob,
+                size: outcome.result.blob.size,
                 lastModified: Date.now(),
               };
+            } else if (outcome.status !== "canceled") {
+              untouched += 1;
             }
           }
         };
         const { downloadZip, makeZip } = await import("client-zip");
 
+        // An archive of nothing is worse than no archive: it looks like a
+        // successful download and contains no photos.
+        const leftOut = () => (untouched > 0
+          ? ` ${countPhrase(untouched, "photo was", "photos were")} left untouched — see the list above.`
+          : "");
+
         if (bulkSaveHandle) {
           const writable = await bulkSaveHandle.createWritable();
           await makeZip(outputs()).pipeTo(writable);
-          if (!canceledRef.current) setNotice("Your repaired PNG archive was saved to the location you chose.");
+          if (canceledRef.current) return;
+          setNotice(cleaned === 0
+            ? { tone: "info", text: `No date stamps were removed, so the archive you chose is empty.${leftOut()}` }
+            : {
+              tone: "success",
+              text: `${countPhrase(cleaned, "photo was", "photos were")} saved to the location you chose.${leftOut()}`,
+            });
         } else {
           const archive = await downloadZip(outputs()).blob();
-          if (!canceledRef.current) {
+          if (canceledRef.current) return;
+          if (cleaned === 0) {
+            setNotice({ tone: "info", text: `No date stamps were removed, so there is nothing to download.${leftOut()}` });
+          } else {
             setLastDownload({ blob: archive, name: archiveName });
             triggerDownload(archive, archiveName);
-            setNotice("Your repaired PNG archive download has started.");
+            setNotice({
+              tone: "success",
+              text: `${countPhrase(cleaned, "photo is", "photos are")} ready as a ZIP.${leftOut()}`
+                + " If the download did not start, use Download ZIP below.",
+            });
           }
         }
       }
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
-        setNotice("Nothing was changed. Choose Remove date stamps when you are ready.");
+        setNotice({ tone: "info", text: "Nothing was changed. Choose Remove date stamps when you are ready." });
       } else if (!canceledRef.current) {
-        setNotice(error instanceof Error ? error.message : "The batch could not be completed.");
+        setNotice({ tone: "error", text: describeFailure(error, "The batch could not be completed.") });
       }
     } finally {
       setIsRunning(false);
@@ -586,7 +727,10 @@ export function CleanerApp() {
           : item,
       ),
     );
-    setNotice("Processing stopped. Clear the list whenever you want to release this tab’s file access.");
+    setNotice({
+      tone: "info",
+      text: "Processing stopped. Clear the list whenever you want to release this tab’s file access.",
+    });
     setIsRunning(false);
   }, []);
 
@@ -769,7 +913,7 @@ export function CleanerApp() {
                     )}
                     {lastDownload && (
                       <button className="primary-button" type="button" onClick={() => triggerDownload(lastDownload.blob, lastDownload.name)}>
-                        <Download size={18} /> Download again
+                        <Download size={18} /> {downloadLabel(lastDownload.name)}
                       </button>
                     )}
                   </>
@@ -779,9 +923,13 @@ export function CleanerApp() {
           )}
 
           {notice && (
-            <div className={`notice ${completed > 0 ? "notice-success" : ""}`} role="status" aria-live="polite">
-              {completed > 0 ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
-              <span>{notice}</span>
+            <div className={`notice notice-${notice.tone}`} role="status" aria-live="polite">
+              {notice.tone === "success"
+                ? <CheckCircle2 size={18} />
+                : notice.tone === "info"
+                  ? <Info size={18} />
+                  : <AlertCircle size={18} />}
+              <span>{notice.text}</span>
             </div>
           )}
 

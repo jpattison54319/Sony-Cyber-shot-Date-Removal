@@ -28,7 +28,8 @@ The only runtime network request beyond static application assets is the public 
 - Large Chromium batches stream to a user-authorized file handle instead of accumulating all outputs in memory.
 - Colliding source basenames receive deterministic numeric suffixes so no PNG is silently overwritten in a batch ZIP.
 - Canceling terminates the worker, releases its model session, and stops the next file from starting.
-- Content Security Policy restricts scripts, workers, image sources, and connections; cross-origin isolation enables bounded WASM threading where available.
+- Content Security Policy restricts script origins, workers, image sources, and connections; cross-origin isolation enables bounded WASM threading where available.
+- The policy allows inline scripts because a static export hands its React payload to the browser through inline `self.__next_f.push(...)` tags that cannot carry a build-independent nonce or hash. Blocking them leaves a page that renders its server HTML and never becomes interactive, which is indistinguishable from a working site until a control is tapped. `npm run build` therefore fails through `scripts/csp-audit.mjs` if the shipped policy cannot run the exported HTML. Script origins, `object-src`, `base-uri`, `form-action`, `frame-ancestors`, and the `connect-src` allowlist remain closed, and the site renders no user-supplied or remote markup.
 
 ## Honest validation boundary
 
