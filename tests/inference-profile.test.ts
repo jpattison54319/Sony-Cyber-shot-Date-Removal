@@ -4,7 +4,7 @@ import { inferenceProfileFor, MODEL_INPUT_SIZE } from "@/lib/inference-profile";
 
 describe("inference profile selection", () => {
   it("uses the model's declared fixed input size", () => {
-    expect(MODEL_INPUT_SIZE).toBe(512);
+    expect(MODEL_INPUT_SIZE).toBe(1024);
   });
 
   it.each([

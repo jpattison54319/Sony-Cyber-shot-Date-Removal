@@ -1,8 +1,8 @@
 import type { InferenceProfile } from "./processing-types";
 
-// The pinned Carve/LaMa-ONNX graph declares fixed image and mask inputs at
-// 512 x 512. The original-resolution crop is restored after inference.
-export const MODEL_INPUT_SIZE = 512;
+// The exact pinned lama_fp32.onnx revision requires fixed image and mask
+// inputs at 1024 x 1024. The original-resolution crop is restored afterward.
+export const MODEL_INPUT_SIZE = 1024;
 
 export interface BrowserDeviceHints {
   userAgent?: string;
