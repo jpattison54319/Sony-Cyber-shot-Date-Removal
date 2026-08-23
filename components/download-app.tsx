@@ -13,6 +13,7 @@ import { PlatformDownloads } from "@/components/platform-downloads";
 
 const RELEASE_ROOT = "https://github.com/jpattison54319/Sony-Cyber-shot-Date-Removal/releases/latest/download";
 const CHECKSUM_URL = `${RELEASE_ROOT}/SHA256SUMS.txt`;
+const RELEASE_URL = "https://github.com/jpattison54319/Sony-Cyber-shot-Date-Removal/releases/latest";
 
 export function DownloadApp() {
   return (
@@ -56,6 +57,7 @@ export function DownloadApp() {
           <PlatformDownloads />
 
           <a className="checksum-link" href={CHECKSUM_URL}>SHA-256 checksums</a>
+          <p className="signing-note">Unsigned first release · <a href={RELEASE_URL}>security note</a></p>
         </section>
       </section>
 

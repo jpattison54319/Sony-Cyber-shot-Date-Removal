@@ -338,6 +338,20 @@ h1 span {
   margin-top: 13px;
 }
 
+.signing-note {
+  margin: -2px 0 0;
+  color: #85867f;
+  text-align: center;
+  font-size: 0.67rem;
+}
+
+.signing-note a {
+  color: #666960;
+  font-weight: 800;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .trust-banner {
   display: flex;
   align-items: center;
