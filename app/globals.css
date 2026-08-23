@@ -220,7 +220,7 @@ button:focus-visible, a:focus-visible {
 .drop-title { font-size: 20px; font-weight: 790; letter-spacing: -0.02em; }
 .file-hint { margin-top: 14px; color: #85867d; font-size: 11px; }
 .picker-button { min-width: 190px; margin: 18px 0 6px; }
-.file-picker-control { position: relative; overflow: hidden; }
+.file-picker-control { position: relative; overflow: hidden; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 .file-picker-control > svg { pointer-events: none; }
 .native-file-input {
   position: absolute;
@@ -230,6 +230,8 @@ button:focus-visible, a:focus-visible {
   height: 100%;
   opacity: 0;
   cursor: pointer;
+  font-size: 16px;
+  touch-action: manipulation;
 }
 .file-picker-control:focus-within {
   outline: 3px solid rgba(240, 138, 36, 0.38);
@@ -340,6 +342,8 @@ button:focus-visible, a:focus-visible {
   text-align: center;
 }
 .notice-success { color: var(--green-dark); background: var(--green-soft); border-color: #d9e9dd; }
+.notice-info { color: var(--amber-dark); background: #fdf4e8; border-color: #f0dcc0; }
+.notice svg { flex-shrink: 0; }
 
 .section-heading h2 { margin: 8px 0 0; font-size: clamp(34px, 5vw, 50px); line-height: 1.08; letter-spacing: -0.052em; }
 .centered-heading { text-align: center; }

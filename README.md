@@ -58,6 +58,8 @@ npm run audit:privacy
 npm run build
 ```
 
+`npm run build` finishes with `scripts/csp-audit.mjs`, which fails the build when the Content Security Policy in `vercel.json` would block the inline scripts the exported pages need in order to hydrate. That failure mode renders a complete-looking page whose buttons and photo picker do nothing, so it is checked on every build rather than left to be discovered in a browser.
+
 The committed automated fixtures are generated arrays with no people or personal imagery. The browser port has not been validated against the original private family archive, and this repository does not claim that it has.
 
 ## Deploying on Vercel
