@@ -31,8 +31,14 @@ function post(message: WorkerResponse): void {
   self.postMessage(message);
 }
 
-function progress(id: string, stage: ProcessingStage, value?: number, detail?: string): void {
-  post({ type: "progress", id, stage, progress: value, detail });
+function progress(
+  id: string,
+  stage: ProcessingStage,
+  value?: number,
+  detail?: string,
+  runtime?: { modelVerified?: boolean; provider?: ExecutionProvider },
+): void {
+  post({ type: "progress", id, stage, progress: value, detail, ...runtime });
 }
 
 function reflectIndex(value: number, length: number): number {
@@ -107,6 +113,7 @@ async function sha256Blob(blob: Blob): Promise<string> {
 }
 
 async function loadVerifiedModel(id: string): Promise<Uint8Array> {
+  progress(id, "model-download", 0, "Checking for a saved restoration model");
   let cache: Cache | null = null;
   try {
     cache = await caches.open(MODEL_CACHE);
@@ -114,7 +121,14 @@ async function loadVerifiedModel(id: string): Promise<Uint8Array> {
     // Private browsing and storage quotas can disable Cache API. Inference can
     // still continue safely after the downloaded bytes pass the same hash gate.
   }
-  let response = cache ? await cache.match(MODEL_URL) : undefined;
+  let response: Response | undefined;
+  if (cache) {
+    try {
+      response = await cache.match(MODEL_URL);
+    } catch {
+      cache = null;
+    }
+  }
   const wasCached = Boolean(response);
   if (!response) {
     response = await fetch(MODEL_URL, { credentials: "omit", referrerPolicy: "no-referrer" });
@@ -124,10 +138,15 @@ async function loadVerifiedModel(id: string): Promise<Uint8Array> {
   }
 
   const total = Number(response.headers.get("content-length")) || 208_044_816;
+  const transferDetail = wasCached
+    ? "Checking the saved local model"
+    : "Downloading the on-device restoration model";
+  progress(id, "model-download", 0, transferDetail);
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   const hasher = await createSHA256();
   let received = 0;
+  let lastReportedPercent = 0;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -135,12 +154,12 @@ async function loadVerifiedModel(id: string): Promise<Uint8Array> {
     chunks.push(value);
     hasher.update(value);
     received += value.byteLength;
-    progress(
-      id,
-      "model-download",
-      Math.min(1, received / total),
-      wasCached ? "Checking the saved local model" : "Downloading the on-device restoration model",
-    );
+    const transferProgress = Math.min(0.99, received / total);
+    const wholePercent = Math.floor(transferProgress * 100);
+    if (wholePercent > lastReportedPercent) {
+      lastReportedPercent = wholePercent;
+      progress(id, "model-download", transferProgress, transferDetail);
+    }
   }
 
   const digest = hasher.digest("hex");
@@ -156,6 +175,7 @@ async function loadVerifiedModel(id: string): Promise<Uint8Array> {
     offset += chunk.byteLength;
   }
 
+  let wasStored = wasCached;
   if (!wasCached && cache) {
     try {
       await cache.put(
@@ -168,10 +188,22 @@ async function loadVerifiedModel(id: string): Promise<Uint8Array> {
           },
         }),
       );
+      wasStored = true;
     } catch {
-      progress(id, "model-download", 1, "Verified model ready; local cache unavailable");
+      wasStored = false;
     }
   }
+  progress(
+    id,
+    "model-download",
+    1,
+    wasCached
+      ? "Saved model integrity verified"
+      : wasStored
+        ? "Download complete; model integrity verified"
+        : "Download verified; browser model cache unavailable",
+    { modelVerified: true },
+  );
   return bytes;
 }
 
@@ -200,7 +232,9 @@ async function createModelSession(
         activeProvider = "webgpu";
         return { session, provider: "webgpu" };
       } catch {
-        progress(id, "model-download", 1, "WebGPU unavailable; using compatibility mode");
+        progress(id, "model-download", 1, "WebGPU unavailable; using compatibility mode", {
+          modelVerified: true,
+        });
       }
     }
 
@@ -361,7 +395,10 @@ async function reconstruct(
 
   const prepared = prepareModelInput(crop.rgb, cropMask, crop.width, crop.height);
   const model = await createModelSession(id, preferWebGpu);
-  progress(id, "reconstruct", 0.1, `Reconstructing locally with ${model.provider.toUpperCase()}`);
+  progress(id, "reconstruct", 0.1, `Reconstructing locally with ${model.provider.toUpperCase()}`, {
+    modelVerified: true,
+    provider: model.provider,
+  });
   const generated = await (async () => {
     const imageTensor = new ort.Tensor("float32", prepared.image, [1, 3, MODEL_SIZE, MODEL_SIZE]);
     const maskTensor = new ort.Tensor("float32", prepared.mask, [1, 1, MODEL_SIZE, MODEL_SIZE]);

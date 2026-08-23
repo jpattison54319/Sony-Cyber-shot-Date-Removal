@@ -42,6 +42,8 @@ export type WorkerResponse =
       stage: ProcessingStage;
       progress?: number;
       detail?: string;
+      modelVerified?: boolean;
+      provider?: ExecutionProvider;
     }
   | { type: "result"; id: string; result: ProcessedImage }
   | { type: "error"; id: string; message: string; code: string };

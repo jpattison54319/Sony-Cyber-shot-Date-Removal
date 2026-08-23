@@ -9,10 +9,12 @@ import {
   ChevronRight,
   CircleStop,
   Code2,
+  Cpu,
   Download,
   ExternalLink,
   FileArchive,
   FileImage,
+  ImagePlus,
   Images,
   LoaderCircle,
   LockKeyhole,
@@ -21,19 +23,19 @@ import {
   Sparkles,
   Trash2,
   Upload,
-  WifiOff,
   X,
 } from "lucide-react";
 import Image from "next/image";
+import type { DragEvent as ReactDragEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import {
   FALLBACK_BATCH_FILES,
-  MAX_BATCH_FILES,
+  batchLimitForStreaming,
   reserveUniqueOutputName,
   validateFile,
 } from "@/lib/file-rules";
-import type { ProcessedImage, ProcessingStage } from "@/lib/processing-types";
+import type { ExecutionProvider, ProcessedImage, ProcessingStage } from "@/lib/processing-types";
 import { ProcessingError, ProcessorClient } from "@/lib/worker-client";
 
 type QueueStatus = "ready" | "processing" | "complete" | "skipped" | "failed" | "canceled";
@@ -53,6 +55,15 @@ interface PreviewPair {
   outputName: string;
   report: ProcessedImage["report"];
   blob: Blob;
+}
+
+type ModelState = "waiting" | "checking" | "verified" | "error";
+
+interface RuntimeStatus {
+  modelState: ModelState;
+  modelProgress: number;
+  modelDetail: string;
+  provider: ExecutionProvider | null;
 }
 
 interface SaveFilePickerOptions {
@@ -109,7 +120,7 @@ function fileId(file: File): string {
   return `${crypto.randomUUID()}-${file.name}-${file.size}-${file.lastModified}`;
 }
 
-function subscribeToWebGpu(): () => void {
+function subscribeToStaticCapability(): () => void {
   return () => undefined;
 }
 
@@ -119,6 +130,14 @@ function getWebGpuSnapshot(): boolean {
 
 function getServerWebGpuSnapshot(): boolean {
   return false;
+}
+
+function getStreamedZipSnapshot(): boolean {
+  return typeof window.showSaveFilePicker === "function";
+}
+
+function isFileDrag(event: ReactDragEvent<HTMLElement>): boolean {
+  return Array.from(event.dataTransfer.types).includes("Files");
 }
 
 function statusIcon(item: QueueItem) {
@@ -133,6 +152,7 @@ export function CleanerApp() {
   const inputRef = useRef<HTMLInputElement>(null);
   const processorRef = useRef<ProcessorClient | null>(null);
   const canceledRef = useRef(false);
+  const dragDepthRef = useRef(0);
   const previewRef = useRef<PreviewPair | null>(null);
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [isDragging, setIsDragging] = useState(false);
@@ -140,11 +160,27 @@ export function CleanerApp() {
   const [notice, setNotice] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewPair | null>(null);
   const [lastDownload, setLastDownload] = useState<{ blob: Blob; name: string } | null>(null);
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus>({
+    modelState: "waiting",
+    modelProgress: 0,
+    modelDetail: "A saved model is checked—or a fresh one downloaded—when you start.",
+    provider: null,
+  });
   const hasWebGpu = useSyncExternalStore(
-    subscribeToWebGpu,
+    subscribeToStaticCapability,
     getWebGpuSnapshot,
     getServerWebGpuSnapshot,
   );
+  const supportsStreamedZip = useSyncExternalStore(
+    subscribeToStaticCapability,
+    getStreamedZipSnapshot,
+    getServerWebGpuSnapshot,
+  );
+  const batchLimit = batchLimitForStreaming(supportsStreamedZip);
+  const canAddFiles = !isRunning
+    && queue.length < batchLimit
+    && queue.every((item) => item.status === "ready");
+  const remainingSlots = Math.max(0, batchLimit - queue.length);
 
   useEffect(() => {
     return () => {
@@ -174,7 +210,7 @@ export function CleanerApp() {
       setNotice(null);
       resetPreview();
       setLastDownload(null);
-      const available = Math.max(0, MAX_BATCH_FILES - queue.length);
+      const available = Math.max(0, batchLimit - queue.length);
       const accepted = incoming.slice(0, available);
       const next: QueueItem[] = [];
       const errors: string[] = [];
@@ -194,11 +230,64 @@ export function CleanerApp() {
         });
       }
 
-      if (incoming.length > available) errors.push(`Only the first ${available} available files were added.`);
+      if (incoming.length > available) {
+        errors.push(`This browser can add ${batchLimit} photos per batch; ${available} slots were available.`);
+      }
       if (errors.length > 0) setNotice(errors.slice(0, 3).join(" "));
       if (next.length > 0) setQueue((current) => [...current, ...next]);
     },
-    [queue.length, resetPreview],
+    [batchLimit, queue.length, resetPreview],
+  );
+
+  const openFilePicker = useCallback(() => {
+    if (!canAddFiles) return;
+    if (inputRef.current) {
+      inputRef.current.value = "";
+      inputRef.current.click();
+    }
+  }, [canAddFiles]);
+
+  const handleDragEnter = useCallback(
+    (event: ReactDragEvent<HTMLElement>) => {
+      if (!isFileDrag(event)) return;
+      event.preventDefault();
+      if (!canAddFiles) return;
+      dragDepthRef.current += 1;
+      setIsDragging(true);
+    },
+    [canAddFiles],
+  );
+
+  const handleDragOver = useCallback(
+    (event: ReactDragEvent<HTMLElement>) => {
+      if (!isFileDrag(event)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = canAddFiles ? "copy" : "none";
+    },
+    [canAddFiles],
+  );
+
+  const handleDragLeave = useCallback((event: ReactDragEvent<HTMLElement>) => {
+    if (dragDepthRef.current === 0) return;
+    event.preventDefault();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setIsDragging(false);
+  }, []);
+
+  const handleDrop = useCallback(
+    (event: ReactDragEvent<HTMLElement>) => {
+      if (!isFileDrag(event)) return;
+      event.preventDefault();
+      dragDepthRef.current = 0;
+      setIsDragging(false);
+      if (isRunning) return;
+      if (!canAddFiles) {
+        setNotice(`This browser supports ${batchLimit} photos per batch. Clear the list to start another.`);
+        return;
+      }
+      addFiles(Array.from(event.dataTransfer.files));
+    },
+    [addFiles, batchLimit, canAddFiles, isRunning],
   );
 
   const clearQueue = useCallback(() => {
@@ -229,13 +318,60 @@ export function CleanerApp() {
     return Math.round(queue.reduce((sum, item) => sum + item.progress, 0) / queue.length);
   }, [queue]);
 
+  const modeLabel = runtimeStatus.provider === "webgpu"
+    ? "WebGPU active"
+    : runtimeStatus.provider === "wasm"
+      ? "Compatibility mode active"
+      : hasWebGpu
+        ? "WebGPU available"
+        : "Compatibility mode";
+  const modeDetail = runtimeStatus.provider
+    ? "Actual local mode selected for this tab."
+    : hasWebGpu
+      ? "GPU acceleration will be tried first."
+      : "Private WebAssembly processing; it may take longer.";
+  const modelLabel = ({
+    waiting: "Not checked yet",
+    checking: "Preparing model",
+    verified: "Integrity verified",
+    error: "Model unavailable",
+  } satisfies Record<ModelState, string>)[runtimeStatus.modelState];
+  const modelPercent = Math.round(runtimeStatus.modelProgress * 100);
+
   const processOne = useCallback(
     async (item: QueueItem): Promise<ProcessedImage | null> => {
       if (canceledRef.current) return null;
+      let lastStage: ProcessingStage | null = null;
+      let verifiedDuringAttempt = false;
       updateItem(item.id, { status: "processing", detail: "Starting…", progress: 1 });
-      if (!processorRef.current) processorRef.current = new ProcessorClient();
+      if (!processorRef.current) {
+        processorRef.current = new ProcessorClient();
+        setRuntimeStatus((current) => ({ ...current, provider: null }));
+      }
       try {
         const result = await processorRef.current.process(item.id, item.file, true, (message) => {
+          lastStage = message.stage;
+          if (message.stage === "model-download") {
+            if (message.modelVerified) verifiedDuringAttempt = true;
+            setRuntimeStatus((current) => ({
+              ...current,
+              modelState: message.modelVerified ? "verified" : "checking",
+              modelProgress: Math.min(1, Math.max(0, message.progress ?? current.modelProgress)),
+              modelDetail: message.detail ?? "Preparing the private restoration model.",
+            }));
+          }
+          if (message.provider) {
+            verifiedDuringAttempt = true;
+            setRuntimeStatus((current) => ({
+              ...current,
+              modelState: "verified",
+              modelProgress: 1,
+              modelDetail: current.modelState === "verified"
+                ? current.modelDetail
+                : "SHA-256 matched before the model was used.",
+              provider: message.provider ?? current.provider,
+            }));
+          }
           const [start, end] = STAGE_PROGRESS[message.stage];
           const stageProgress = message.progress ?? 0;
           updateItem(item.id, {
@@ -249,6 +385,15 @@ export function CleanerApp() {
           detail: "Verified and ready",
           progress: 100,
         });
+        setRuntimeStatus((current) => ({
+          ...current,
+          modelState: "verified",
+          modelProgress: 1,
+          modelDetail: current.modelState === "verified"
+            ? current.modelDetail
+            : "SHA-256 matched before the model was used.",
+          provider: result.report.executionProvider,
+        }));
         return result;
       } catch (error) {
         if (canceledRef.current) {
@@ -256,6 +401,15 @@ export function CleanerApp() {
           return null;
         }
         const message = error instanceof Error ? error.message : "This photo could not be processed.";
+        if (lastStage === "model-download" && !verifiedDuringAttempt) {
+          setRuntimeStatus((current) => ({
+            ...current,
+            modelState: "error",
+            modelProgress: 0,
+            modelDetail: message,
+            provider: null,
+          }));
+        }
         updateItem(item.id, {
           status: error instanceof ProcessingError && error.code === "not-found" ? "skipped" : "failed",
           detail: message,
@@ -291,6 +445,8 @@ export function CleanerApp() {
     setLastDownload(null);
     resetPreview();
     canceledRef.current = false;
+    dragDepthRef.current = 0;
+    setIsDragging(false);
     setIsRunning(true);
 
     try {
@@ -363,6 +519,14 @@ export function CleanerApp() {
     canceledRef.current = true;
     processorRef.current?.terminate();
     processorRef.current = null;
+    dragDepthRef.current = 0;
+    setIsDragging(false);
+    setRuntimeStatus({
+      modelState: "waiting",
+      modelProgress: 0,
+      modelDetail: "Canceled safely; the model will be checked again on retry.",
+      provider: null,
+    });
     setQueue((current) =>
       current.map((item) =>
         item.status === "processing" || item.status === "ready"
@@ -378,6 +542,12 @@ export function CleanerApp() {
     if (isRunning) return;
     processorRef.current?.terminate("Restarting the processor.");
     processorRef.current = null;
+    setRuntimeStatus({
+      modelState: "waiting",
+      modelProgress: 0,
+      modelDetail: "The saved model will be checked again when processing restarts.",
+      provider: null,
+    });
     setQueue((current) =>
       current.map((item) =>
         item.status === "complete"
@@ -413,44 +583,84 @@ export function CleanerApp() {
           Your photos are reconstructed privately in this browser and never uploaded.
         </p>
 
-        <section className="workspace-shell" aria-labelledby="workspace-title">
+        <section
+          className={`workspace-shell ${isDragging ? "is-dragging" : ""}`}
+          aria-labelledby="workspace-title"
+          onDragEnter={handleDragEnter}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          <input
+            ref={inputRef}
+            className="visually-hidden"
+            type="file"
+            accept="image/jpeg,image/png,.jpg,.jpeg,.png"
+            multiple
+            aria-label="Choose one or more photos"
+            onChange={(event) => {
+              const files = Array.from(event.currentTarget.files ?? []);
+              event.currentTarget.value = "";
+              addFiles(files);
+            }}
+          />
           <div className="workspace-topbar">
             <div>
               <span className="label" id="workspace-title">LOCAL WORKSPACE</span>
               <span className="ready"><span /> {isRunning ? `${overallProgress}% complete` : "Ready"}</span>
             </div>
-            <span>{hasWebGpu ? "WEBGPU READY" : "COMPATIBILITY MODE"} · JPG · PNG</span>
+            <span>LOCAL ONLY · JPG · PNG</span>
+          </div>
+
+          <div className="runtime-strip" role="group" aria-label="Local processing readiness">
+            <div className={`runtime-item mode-${runtimeStatus.provider ?? (hasWebGpu ? "webgpu" : "wasm")}`}>
+              <span className="runtime-icon" aria-hidden="true"><Cpu size={20} /></span>
+              <span className="runtime-copy">
+                <span className="runtime-label">PROCESSING MODE</span>
+                <strong>{modeLabel}</strong>
+                <span className="runtime-detail">{modeDetail}</span>
+              </span>
+            </div>
+            <div className={`runtime-item model-${runtimeStatus.modelState}`}>
+              <span className="runtime-icon" aria-hidden="true">
+                {runtimeStatus.modelState === "checking" ? <LoaderCircle className="spin" size={20} /> :
+                  runtimeStatus.modelState === "verified" ? <ShieldCheck size={20} /> :
+                    runtimeStatus.modelState === "error" ? <AlertCircle size={20} /> : <Download size={20} />}
+              </span>
+              <span className="runtime-copy">
+                <span className="runtime-label">RESTORATION MODEL</span>
+                <span className="runtime-title-row">
+                  <strong aria-live="polite">{modelLabel}</strong>
+                  {runtimeStatus.modelState === "checking" && <b>{modelPercent}%</b>}
+                </span>
+                <span className="runtime-detail">{runtimeStatus.modelDetail}</span>
+                {runtimeStatus.modelState === "checking" && (
+                  <span
+                    className="runtime-progress"
+                    role="progressbar"
+                    aria-label="Restoration model preparation"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={modelPercent}
+                  >
+                    <span style={{ width: `${modelPercent}%` }} />
+                  </span>
+                )}
+              </span>
+            </div>
           </div>
 
           {queue.length === 0 ? (
-            <>
-              <input
-                ref={inputRef}
-                className="visually-hidden"
-                type="file"
-                accept="image/jpeg,image/png,.jpg,.jpeg,.png"
-                multiple
-                onChange={(event) => addFiles(Array.from(event.target.files ?? []))}
-              />
-              <button
-                className={`drop-zone ${isDragging ? "is-dragging" : ""}`}
-                type="button"
-                onClick={() => inputRef.current?.click()}
-                onDragEnter={(event) => { event.preventDefault(); setIsDragging(true); }}
-                onDragOver={(event) => event.preventDefault()}
-                onDragLeave={(event) => { event.preventDefault(); setIsDragging(false); }}
-                onDrop={(event) => {
-                  event.preventDefault();
-                  setIsDragging(false);
-                  addFiles(Array.from(event.dataTransfer.files));
-                }}
-              >
-                <span className="upload-icon"><Upload size={26} strokeWidth={1.8} /></span>
-                <span className="drop-title">Choose photos</span>
-                <span className="drop-copy">or drag and drop them here</span>
-                <span className="file-hint">One photo or a batch of up to 200 · 30 MB each</span>
+            <div className={`drop-zone ${isDragging ? "is-dragging" : ""}`}>
+              <span className="upload-icon"><Upload size={26} strokeWidth={1.8} /></span>
+              <span className="drop-title">Choose one photo or a whole batch</span>
+              <button className="primary-button picker-button" type="button" onClick={openFilePicker}>
+                <Images size={18} /> Choose photos
               </button>
-            </>
+              <span className="drop-copy desktop-drop-copy">or drag and drop JPG or PNG files here</span>
+              <span className="drop-copy mobile-picker-copy">Select one photo or multiple photos from your library or Files.</span>
+              <span className="file-hint">Up to {batchLimit} photos per batch · 30 MB each</span>
+            </div>
           ) : (
             <div className="queue-panel">
               <div className="queue-heading">
@@ -459,9 +669,16 @@ export function CleanerApp() {
                   <h2>{isRunning ? "Removing date stamps" : completed > 0 ? "Processing complete" : "Ready to clean"}</h2>
                 </div>
                 {!isRunning && (
-                  <button className="icon-button" type="button" onClick={clearQueue} aria-label="Clear selected photos">
-                    <Trash2 size={18} />
-                  </button>
+                  <div className="queue-heading-actions">
+                    {canAddFiles && (
+                      <button className="add-photos-button" type="button" onClick={openFilePicker}>
+                        <ImagePlus size={17} /> Add photos
+                      </button>
+                    )}
+                    <button className="icon-button" type="button" onClick={clearQueue} aria-label="Clear selected photos">
+                      <Trash2 size={18} />
+                    </button>
+                  </div>
                 )}
               </div>
 
@@ -488,6 +705,14 @@ export function CleanerApp() {
                   </li>
                 ))}
               </ul>
+
+              {canAddFiles && (
+                <p className="queue-add-hint">
+                  <span className="desktop-drop-copy">Drop more photos anywhere in this workspace, or choose Add photos.</span>
+                  <span className="mobile-picker-copy">Choose Add photos to select more from your device.</span>
+                  <small>{remainingSlots} {remainingSlots === 1 ? "slot" : "slots"} left in this batch</small>
+                </p>
+              )}
 
               <div className="queue-actions">
                 {isRunning ? (
@@ -530,10 +755,10 @@ export function CleanerApp() {
           </div>
         )}
 
-        {!hasWebGpu && (
+        {(runtimeStatus.provider === "wasm" || (!runtimeStatus.provider && !hasWebGpu)) && (
           <div className="compatibility-note">
-            <WifiOff size={17} />
-            <span>Compatibility mode is slower. Current Chrome or Edge is recommended for large batches.</span>
+            <Cpu size={17} />
+            <span>WebAssembly compatibility mode stays private, but may take longer. A current desktop Chrome or Edge is best for larger batches.</span>
           </div>
         )}
       </section>

@@ -8,6 +8,7 @@ The public website has no photo-upload endpoint, account system, analytics, or p
 
 - One photo → one automatically downloaded, verified PNG.
 - Multiple photos → one PNG-only ZIP, streamed directly to disk in supported desktop browsers.
+- The visible picker accepts one or many photos; desktop users can also drag and drop, then add more before processing.
 - Failed or uncertain detection → no edited output for that photo.
 - Exact decoded-RGB preservation outside the detected timestamp mask.
 - Sequential processing for bounded memory use across batches of up to 200 photos.
@@ -30,8 +31,11 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full data flow and threat boundar
 
 - Current desktop Chrome or Edge: recommended; WebGPU acceleration and streamed large-batch ZIP output.
 - Safari and Firefox: ONNX WebAssembly compatibility mode; slower and limited to 25-photo in-memory ZIPs.
-- Inputs: JPG, JPEG, and opaque PNG; 30 MB and 40 megapixels per file; 200 files per selection.
+- Mobile and other non-streaming browsers: native multi-select picker with touch-sized controls and a 25-photo ZIP limit.
+- Inputs: JPG, JPEG, and opaque PNG; 30 MB and 40 megapixels per file; up to 200 files with streamed ZIP support.
 - Outputs: lossless, orientation-normalized RGB PNG.
+
+The workspace shows capability before processing and the provider actually selected afterward. It also shows model download or cache-check progress and only reports `Integrity verified` after the pinned SHA-256 matches.
 
 ## Development
 

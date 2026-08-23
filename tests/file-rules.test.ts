@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  FALLBACK_BATCH_FILES,
+  MAX_BATCH_FILES,
   MAX_FILE_BYTES,
+  batchLimitForStreaming,
   reserveUniqueOutputName,
   safeOutputName,
   validateFile,
@@ -12,6 +15,11 @@ describe("local file safety rules", () => {
   it("accepts standard camera JPEGs and rejects oversized files", () => {
     expect(validateFile({ name: "DSC0012.JPG", type: "image/jpeg", size: 2_000_000 })).toBeNull();
     expect(validateFile({ name: "large.jpg", type: "image/jpeg", size: MAX_FILE_BYTES + 1 })).toContain("30 MB");
+  });
+
+  it("keeps non-streaming and mobile-style browsers within the bounded ZIP limit", () => {
+    expect(batchLimitForStreaming(true)).toBe(MAX_BATCH_FILES);
+    expect(batchLimitForStreaming(false)).toBe(FALLBACK_BATCH_FILES);
   });
 
   it("sanitizes paths and always creates a PNG name", () => {

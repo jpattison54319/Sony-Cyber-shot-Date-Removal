@@ -6,6 +6,10 @@ export const FALLBACK_BATCH_FILES = 25;
 const SUPPORTED_MIME_TYPES = new Set(["image/jpeg", "image/png"]);
 const SUPPORTED_EXTENSIONS = new Set(["jpg", "jpeg", "png"]);
 
+export function batchLimitForStreaming(supportsStreamedZip: boolean): number {
+  return supportsStreamedZip ? MAX_BATCH_FILES : FALLBACK_BATCH_FILES;
+}
+
 export function validateFile(file: Pick<File, "name" | "size" | "type">): string | null {
   const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
   if (!SUPPORTED_MIME_TYPES.has(file.type) && !SUPPORTED_EXTENSIONS.has(extension)) {
