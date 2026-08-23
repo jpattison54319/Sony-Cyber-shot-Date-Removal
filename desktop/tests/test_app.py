@@ -7,7 +7,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QFrame
 
 from date_stamp_cleaner.app import THEME, MainWindow, apply_application_theme
 from date_stamp_cleaner.batch import PhotoResult
@@ -96,21 +96,41 @@ class MainWindowTests(unittest.TestCase):
             self.assertEqual(self.window.detail_body.text(), error)
             self.assertEqual(
                 self.window.status_label.text(),
-                "No photos were cleaned. See the error below the photo list.",
+                "No photos cleaned.",
             )
 
     def test_theme_has_explicit_title_table_and_disabled_button_colors(self) -> None:
         style = self.window.styleSheet()
-        self.assertIn(f"QLabel#title {{ color: {THEME['text_on_dark']};", style)
+        self.assertIn(f"QLabel#title {{ color: {THEME['text']};", style)
         self.assertIn(f"QTableWidget {{ color: {THEME['text']};", style)
         self.assertIn(f"QTableWidget::item:selected {{ color: {THEME['text']};", style)
         self.assertIn("QPushButton#primaryButton:disabled", style)
 
+    def test_interface_avoids_decorative_badges_and_proof_strips(self) -> None:
+        style = self.window.styleSheet()
+        self.assertNotIn("localBadge", style)
+        self.assertNotIn("trustStrip", style)
+        self.assertNotIn("brandMark", style)
+        self.assertEqual(self.window.count_label.text(), "Photos (0)")
+        self.assertEqual(self.window.status_label.text(), "Ready")
+
+    def test_error_details_do_not_hide_the_output_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            self._add_photo(temporary)
+            self.window._set_row_status(0, "failed", "No date stamp was found.")
+            self.window.show()
+            self.application.processEvents()
+
+            destination = self.window.findChild(QFrame, "destination")
+            self.assertIsNotNone(destination)
+            self.assertTrue(destination.isVisible())
+            self.assertGreaterEqual(destination.height(), 44)
+
     def test_essential_theme_pairings_meet_wcag_contrast(self) -> None:
-        self.assertGreaterEqual(_contrast_ratio(THEME["text_on_dark"], THEME["canvas"]), 7.0)
+        self.assertGreaterEqual(_contrast_ratio(THEME["text"], THEME["canvas"]), 7.0)
         self.assertGreaterEqual(_contrast_ratio(THEME["text"], THEME["surface"]), 7.0)
         self.assertGreaterEqual(_contrast_ratio(THEME["text_muted"], THEME["surface"]), 4.5)
-        self.assertGreaterEqual(_contrast_ratio(THEME["text_on_dark"], THEME["accent"]), 4.5)
+        self.assertGreaterEqual(_contrast_ratio(THEME["text_on_primary"], THEME["primary"]), 7.0)
 
     def test_window_cannot_resize_below_complete_layout(self) -> None:
         self.assertGreaterEqual(self.window.minimumWidth(), 760)

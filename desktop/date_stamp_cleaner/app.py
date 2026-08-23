@@ -47,28 +47,25 @@ MAX_PHOTOS = 500
 ROW_DETAIL_ROLE = int(Qt.ItemDataRole.UserRole)
 ROW_STATUS_ROLE = ROW_DETAIL_ROLE + 1
 THEME = {
-    "canvas": "#171a16",
-    "canvas_raised": "#22261f",
-    "canvas_border": "#363c32",
-    "surface": "#fffdf8",
-    "surface_soft": "#f3f0e7",
-    "surface_hover": "#f8eadb",
-    "text": "#171a16",
-    "text_muted": "#5d6459",
-    "text_on_dark": "#fff9ed",
-    "text_muted_on_dark": "#bdc6b8",
-    "accent": "#b64a0a",
-    "accent_hover": "#963b06",
-    "accent_soft": "#f8dfc8",
-    "accent_text": "#873405",
+    "canvas": "#f2f2ef",
+    "surface": "#ffffff",
+    "surface_soft": "#f7f7f4",
+    "surface_hover": "#f3eee8",
+    "text": "#20221f",
+    "text_muted": "#5b6059",
+    "text_on_primary": "#ffffff",
+    "primary": "#282b26",
+    "primary_hover": "#171916",
+    "accent": "#a7440f",
+    "accent_soft": "#f5e5da",
     "success": "#245b43",
     "success_soft": "#e3f1e7",
     "success_border": "#bad7c3",
     "danger": "#8f3029",
     "danger_soft": "#fbeae6",
     "danger_border": "#e6b9b1",
-    "border": "#d8d3c6",
-    "border_strong": "#b7b1a3",
+    "border": "#d7d8d3",
+    "border_strong": "#aeb1aa",
     "disabled_text": "#777b72",
     "disabled_bg": "#e4e1d8",
 }
@@ -186,7 +183,7 @@ class PhotoTable(QTableWidget):
             self.viewport().width() - 48,
             28,
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
-            "or choose JPG and PNG photos",
+            "JPG or PNG",
         )
 
 
@@ -241,7 +238,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(_app_icon())
-        self.resize(920, 680)
+        self.resize(900, 680)
         self.setMinimumSize(760, 680)
 
         self.sources: list[Path] = []
@@ -255,42 +252,24 @@ class MainWindow(QMainWindow):
         central.setObjectName("page")
         self.setCentralWidget(central)
         page = QVBoxLayout(central)
-        page.setContentsMargins(34, 28, 34, 28)
-        page.setSpacing(18)
+        page.setContentsMargins(30, 24, 30, 26)
+        page.setSpacing(16)
 
         header = QHBoxLayout()
-        header.setSpacing(14)
-        brand_mark = QLabel()
-        brand_mark.setObjectName("brandMark")
-        brand_mark.setPixmap(_app_icon().pixmap(52, 52))
-        brand_mark.setFixedSize(52, 52)
-        header.addWidget(brand_mark)
         heading = QVBoxLayout()
-        heading.setSpacing(3)
+        heading.setSpacing(2)
         title = QLabel(APP_NAME)
         title.setObjectName("title")
-        subtitle = QLabel("Remove Sony Cyber-shot date stamps locally.")
+        subtitle = QLabel("Remove Sony Cyber-shot dates.")
         subtitle.setObjectName("subtitle")
         heading.addWidget(title)
         heading.addWidget(subtitle)
         header.addLayout(heading)
         header.addStretch()
-        local_badge = QLabel("●  LOCAL ONLY")
-        local_badge.setObjectName("localBadge")
-        header.addWidget(local_badge)
+        privacy_status = QLabel("Local processing")
+        privacy_status.setObjectName("privacyStatus")
+        header.addWidget(privacy_status)
         page.addLayout(header)
-
-        trust = QFrame()
-        trust.setObjectName("trustStrip")
-        trust_layout = QHBoxLayout(trust)
-        trust_layout.setContentsMargins(18, 11, 18, 11)
-        trust_layout.setSpacing(24)
-        for text in ("Exact workflow", "Originals stay untouched", "Verified lossless PNG"):
-            label = QLabel(f"✓  {text}")
-            label.setObjectName("trustItem")
-            trust_layout.addWidget(label)
-        trust_layout.addStretch()
-        page.addWidget(trust)
 
         card = QFrame()
         card.setObjectName("card")
@@ -299,11 +278,11 @@ class MainWindow(QMainWindow):
         card_layout.setSpacing(14)
 
         toolbar = QHBoxLayout()
-        self.count_label = QLabel("PHOTOS · 0")
+        self.count_label = QLabel("Photos (0)")
         self.count_label.setObjectName("sectionLabel")
         toolbar.addWidget(self.count_label)
         toolbar.addStretch()
-        self.add_button = QPushButton("Choose photos")
+        self.add_button = QPushButton("Add photos")
         self.add_button.setObjectName("secondaryButton")
         self.add_button.clicked.connect(self.choose_photos)
         self.remove_button = QPushButton("Remove selected")
@@ -345,10 +324,12 @@ class MainWindow(QMainWindow):
 
         destination = QFrame()
         destination.setObjectName("destination")
+        destination.setMinimumHeight(44)
         destination_layout = QHBoxLayout(destination)
-        destination_layout.setContentsMargins(14, 10, 10, 10)
+        destination_layout.setContentsMargins(0, 2, 0, 2)
         destination_copy = QVBoxLayout()
-        destination_title = QLabel("SAVE RESULTS TO")
+        destination_copy.setSpacing(1)
+        destination_title = QLabel("Save to")
         destination_title.setObjectName("smallLabel")
         self.destination_path = QLabel(str(self.output_parent))
         self.destination_path.setObjectName("pathLabel")
@@ -370,31 +351,26 @@ class MainWindow(QMainWindow):
         card_layout.addWidget(self.progress)
 
         actions = QHBoxLayout()
-        self.status_label = QLabel("Choose JPG or PNG photos to begin.")
+        self.status_label = QLabel("Ready")
         self.status_label.setObjectName("statusLabel")
         self.status_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         actions.addWidget(self.status_label)
-        self.open_button = QPushButton("Open results")
+        self.open_button = QPushButton("Open folder")
         self.open_button.setObjectName("secondaryButton")
         self.open_button.clicked.connect(self.open_results)
         self.open_button.hide()
         actions.addWidget(self.open_button)
-        self.stop_button = QPushButton("Stop after current photo")
+        self.stop_button = QPushButton("Stop")
         self.stop_button.setObjectName("dangerButton")
         self.stop_button.clicked.connect(self.stop_processing)
         self.stop_button.hide()
         actions.addWidget(self.stop_button)
-        self.run_button = QPushButton("Remove date stamps")
+        self.run_button = QPushButton("Remove dates")
         self.run_button.setObjectName("primaryButton")
         self.run_button.clicked.connect(self.start_processing)
         actions.addWidget(self.run_button)
         card_layout.addLayout(actions)
         page.addWidget(card, 1)
-
-        footnote = QLabel("Photos stay on this computer. Only the detected date area is reconstructed.")
-        footnote.setObjectName("footnote")
-        footnote.setWordWrap(True)
-        page.addWidget(footnote)
 
         self._apply_style()
         self._refresh_controls()
@@ -408,37 +384,34 @@ class MainWindow(QMainWindow):
                 """
                 QMainWindow, QWidget#page { background: $canvas; }
                 QLabel { color: $text; background: transparent; }
-                QLabel#brandMark { background: $canvas_raised; border: 1px solid $canvas_border; border-radius: 14px; padding: 0; }
-                QLabel#title { color: $text_on_dark; font-size: 31px; font-weight: 800; letter-spacing: -1px; }
-                QLabel#subtitle { color: $text_muted_on_dark; font-size: 14px; }
-                QLabel#localBadge { color: $success; background: $success_soft; border: 1px solid $success_border; border-radius: 13px; padding: 8px 12px; font-size: 11px; font-weight: 800; }
-                QFrame#trustStrip { background: $canvas_raised; border: 1px solid $canvas_border; border-radius: 12px; }
-                QLabel#trustItem { color: $text_muted_on_dark; font-size: 12px; font-weight: 650; }
-                QFrame#card { background: $surface; border: 1px solid $border; border-radius: 18px; }
-                QLabel#sectionLabel, QLabel#smallLabel { color: $accent_text; font-size: 10px; font-weight: 800; letter-spacing: 1px; }
-                QTableWidget { color: $text; background: $surface; alternate-background-color: $surface_soft; border: 1px dashed $border_strong; border-radius: 12px; selection-background-color: $accent_soft; selection-color: $text; outline: none; }
+                QLabel#title { color: $text; font-size: 26px; font-weight: 700; }
+                QLabel#subtitle { color: $text_muted; font-size: 13px; }
+                QLabel#privacyStatus { color: $success; font-size: 12px; font-weight: 650; }
+                QFrame#card { background: $surface; border: 1px solid $border; border-radius: 8px; }
+                QLabel#sectionLabel { color: $text; font-size: 14px; font-weight: 650; }
+                QLabel#smallLabel { color: $text; font-size: 12px; font-weight: 650; }
+                QTableWidget { color: $text; background: $surface; alternate-background-color: $surface_soft; border: 1px solid $border_strong; border-radius: 6px; selection-background-color: $accent_soft; selection-color: $text; outline: none; }
                 QTableWidget:focus { border: 2px solid $accent; }
-                QTableWidget::item { color: $text; border-bottom: 1px solid $border; padding: 9px; }
+                QTableWidget::item { color: $text; border-bottom: 1px solid $border; padding: 8px; }
                 QTableWidget::item:selected { color: $text; background: $accent_soft; }
                 QTableWidget::item:hover { color: $text; background: $surface_hover; }
-                QHeaderView::section { color: $text_muted; background: $surface_soft; border: none; border-bottom: 1px solid $border; padding: 8px; font-size: 10px; font-weight: 750; }
-                QFrame#detailPanel { background: $surface_soft; border: 1px solid $border; border-radius: 10px; }
+                QHeaderView::section { color: $text_muted; background: $surface_soft; border: none; border-bottom: 1px solid $border; padding: 8px; font-size: 11px; font-weight: 650; }
+                QFrame#detailPanel { background: $surface_soft; border: 1px solid $border; border-radius: 6px; }
                 QFrame#detailPanel[kind="error"] { background: $danger_soft; border-color: $danger_border; }
                 QFrame#detailPanel[kind="success"] { background: $success_soft; border-color: $success_border; }
-                QLabel#detailTitle { color: $text; border: none; font-size: 12px; font-weight: 750; }
+                QLabel#detailTitle { color: $text; border: none; font-size: 12px; font-weight: 650; }
                 QLabel#detailBody { color: $text_muted; border: none; font-size: 12px; }
                 QFrame#detailPanel[kind="error"] QLabel#detailTitle { color: $danger; }
                 QFrame#detailPanel[kind="success"] QLabel#detailTitle { color: $success; }
-                QFrame#destination { background: $surface_soft; border: 1px solid $border; border-radius: 10px; }
+                QFrame#destination { background: transparent; border: none; }
                 QLabel#pathLabel { color: $text_muted; font-size: 12px; }
                 QLabel#statusLabel { color: $text_muted; font-size: 12px; }
-                QLabel#footnote { color: $text_muted_on_dark; font-size: 11px; }
                 QToolTip { color: $text; background: $surface; border: 1px solid $border_strong; padding: 6px; }
-                QPushButton { min-height: 38px; color: $text; background: $surface; border: 1px solid $border; padding: 0 14px; border-radius: 9px; font-size: 12px; font-weight: 700; }
+                QPushButton { min-height: 36px; color: $text; background: $surface; border: 1px solid $border; padding: 0 13px; border-radius: 6px; font-size: 12px; font-weight: 650; }
                 QPushButton:hover { background: $surface_hover; border-color: $border_strong; }
                 QPushButton:focus { border: 2px solid $accent; }
-                QPushButton#primaryButton { min-height: 44px; color: $text_on_dark; background: $accent; border: 1px solid $accent; padding: 0 19px; }
-                QPushButton#primaryButton:hover { background: $accent_hover; border-color: $accent_hover; }
+                QPushButton#primaryButton { min-height: 40px; color: $text_on_primary; background: $primary; border: 1px solid $primary; padding: 0 18px; }
+                QPushButton#primaryButton:hover { background: $primary_hover; border-color: $primary_hover; }
                 QPushButton#primaryButton:disabled { color: $disabled_text; background: $disabled_bg; border-color: $border; }
                 QPushButton#secondaryButton { color: $text; background: $surface; border: 1px solid $border_strong; }
                 QPushButton#quietButton { color: $text_muted; background: transparent; border: 1px solid transparent; padding: 0 10px; }
@@ -447,8 +420,8 @@ class MainWindow(QMainWindow):
                 QPushButton#dangerButton { color: $danger; background: $danger_soft; border: 1px solid $danger_border; }
                 QPushButton#dangerButton:hover { background: $danger_border; }
                 QPushButton:disabled { color: $disabled_text; background: $disabled_bg; border-color: $border; }
-                QProgressBar { min-height: 8px; max-height: 8px; background: $disabled_bg; border: none; border-radius: 4px; }
-                QProgressBar::chunk { background: $accent; border-radius: 4px; }
+                QProgressBar { min-height: 6px; max-height: 6px; background: $disabled_bg; border: none; border-radius: 3px; }
+                QProgressBar::chunk { background: $accent; border-radius: 3px; }
                 """
             ).substitute(THEME)
         )
@@ -541,7 +514,7 @@ class MainWindow(QMainWindow):
         self.progress.show()
         self.open_button.hide()
         self._hide_detail()
-        self.status_label.setText("Checking the included model…")
+        self.status_label.setText("Checking model…")
         for row in range(self.table.rowCount()):
             item = self.table.item(row, 2)
             item.setText("Waiting")
@@ -615,12 +588,12 @@ class MainWindow(QMainWindow):
         else:
             self._hide_detail()
         if succeeded:
-            self.status_label.setText(f"{succeeded} verified · {failed} failed · {canceled} canceled")
+            self.status_label.setText(f"{succeeded} complete · {failed} failed · {canceled} canceled")
             self.open_button.show()
         elif canceled:
             self.status_label.setText("Processing stopped. No originals were changed.")
         else:
-            self.status_label.setText("No photos were cleaned. See the error below the photo list.")
+            self.status_label.setText("No photos cleaned.")
         self.progress.setValue(100 if succeeded + failed + canceled == len(self.sources) else self.progress.value())
 
     @Slot(str)
@@ -697,7 +670,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_controls(self) -> None:
         running = self.worker is not None
-        self.count_label.setText(f"PHOTOS · {len(self.sources)}")
+        self.count_label.setText(f"Photos ({len(self.sources)})")
         self.add_button.setEnabled(not running and len(self.sources) < MAX_PHOTOS)
         self.remove_button.setEnabled(not running and bool(self.table.selectedItems()))
         self.clear_button.setEnabled(not running and bool(self.sources))
@@ -707,7 +680,7 @@ class MainWindow(QMainWindow):
         self.stop_button.setVisible(running)
         self.stop_button.setEnabled(running)
         if not self.sources and not running:
-            self.status_label.setText("Choose JPG or PNG photos to begin.")
+            self.status_label.setText("Ready")
             self._hide_detail()
 
     def closeEvent(self, event: QCloseEvent) -> None:
