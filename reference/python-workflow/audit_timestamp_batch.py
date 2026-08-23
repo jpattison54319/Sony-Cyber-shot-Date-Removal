@@ -35,6 +35,10 @@ def main() -> None:
             errors.append("outside-mask exactness flag is false")
         if report["timestamp_sequence_redetected"]:
             errors.append("timestamp sequence redetected")
+        if not report.get("timestamp_imprint_check_applied"):
+            errors.append("timestamp imprint check was not applied")
+        if report.get("timestamp_imprint_detected"):
+            errors.append("possible dark timestamp outline detected")
         model_hash = report.get("inpainting_model_sha256")
         if model_hash:
             model_hashes.add(model_hash)
@@ -48,6 +52,10 @@ def main() -> None:
                 "orange_threshold_pixels_inside_mask_after": report[
                     "remaining_orange_core_pixels_inside_mask"
                 ],
+                "timestamp_imprint_detected": report.get("timestamp_imprint_detected"),
+                "timestamp_imprint_rescue_used": report.get(
+                    "timestamp_imprint_rescue_used", False
+                ),
                 "edited_area_percent": report["edited_area_percent"],
                 "input_sha256": report["input_sha256"],
                 "output_sha256": report["output_sha256"],

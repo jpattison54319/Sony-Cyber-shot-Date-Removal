@@ -16,8 +16,9 @@ photo storage.
 - Keep every original untouched.
 - Save successful results as lossless PNGs in a new run folder.
 - Retain the exact timestamp mask, per-photo audit report, and batch manifest.
-- Reject a result if the original workflow detects a changed pixel outside the
-  mask or redetects the timestamp.
+- Reject a result if the workflow detects a changed pixel outside the mask,
+  redetects the timestamp, or finds a strong connected glyph-shaped imprint
+  after its bounded rescue pass.
 
 The covered scene cannot be historically recovered. LaMa reconstructs that
 small area; the exactness guarantee applies to decoded RGB pixels outside the
@@ -66,8 +67,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the privacy boundary and
 ## Project map
 
 - `desktop/` — native PySide6 interface, batch controller, tests, and packaging.
-- `reference/python-workflow/` — original Python detector, reconstruction, and
-  audit implementation used directly by the app.
+- `reference/python-workflow/` — original Python detector and compositor plus
+  the hardened reconstruction audit used directly by the app.
 - `app/` and `components/download-app.tsx` — static installer download site.
 - `.github/workflows/desktop-release.yml` — per-platform installer builds.
 

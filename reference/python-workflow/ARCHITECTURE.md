@@ -59,6 +59,17 @@ The production method is `lama`:
 - `torch.use_deterministic_algorithms(True)`;
 - local crop only.
 
+The first pass uses the exact measured timestamp mask. A crop-local artifact
+gate looks for dark source-outline evidence that is both repeated across glyphs
+and spatially coherent. Its conservative cutoff was checked against all 162
+available approved edited outputs; textured floors, fabric, and real scene
+edges remain below the combined rejection boundary. If the boundary is crossed,
+the workflow first retries without MKLDNN when that backend is active, avoiding
+a platform-specific optimized kernel. If the imprint remains, one final pass
+uses rounded boxes around the eight glyphs so the model cannot echo the digit
+silhouettes. Rescue pixels are still composited only through the original mask.
+A final detected imprint fails closed.
+
 Classical harmonic, edge-guided, bilateral, and texture candidates remain in
 the code for diagnostics. They are deterministic but are not recommended as
 the general default for dates crossing people, fabric, text, and textured
@@ -80,11 +91,12 @@ Before success is reported:
 4. compare against canonical source;
 5. require zero changed pixels outside the mask;
 6. rerun the timestamp detector and require no date sequence;
-7. record source/output SHA-256 values.
+7. require the connected timestamp-imprint gate to pass;
+8. record source/output SHA-256 values.
 
 `audit_timestamp_batch.py` checks every report and every PNG container again.
-The review-sheet step is a separate visual gate for artifacts that numeric
-tests cannot define.
+The review-sheet step remains a separate visual gate for other artifacts that
+numeric tests cannot define.
 
 ## 7. Determinism boundary
 
@@ -112,4 +124,3 @@ new explicit profile containing:
 
 Select a profile only when it scores confidently. Otherwise return a review
 state and do not edit.
-

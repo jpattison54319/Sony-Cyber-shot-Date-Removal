@@ -36,10 +36,28 @@ from scipy.spatial import cKDTree
 
 
 _LAMA_MODEL = None
+_LAMA_MODEL_PATH: Path | None = None
+_LAMA_MODEL_SHA256: str | None = None
 EXPECTED_LAMA_SHA256 = "7ba7aa7ac37a4d41fdbbeba3a2af7ead18058552997e3a3cd1a3b2210c9e6b4c"
 
 
 LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float64)
+
+# The 162 accepted golden repairs peak just below 0.30 on highly textured or
+# high-contrast scenes.  A 0.35 cutoff retains margin for those legitimate
+# structures while still catching a strong, connected glyph-shaped imprint.
+TIMESTAMP_IMPRINT_FRACTION_LIMIT = 0.35
+TIMESTAMP_IMPRINT_AFFECTED_GLYPH_LIMIT = 3
+TIMESTAMP_IMPRINT_COHERENT_FRACTION_LIMIT = 0.35
+TIMESTAMP_IMPRINT_COHERENT_GLYPH_LIMIT = 2
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 @dataclass(frozen=True)
@@ -545,6 +563,177 @@ def local_crop(rgb: np.ndarray, mask: np.ndarray, padding: int) -> tuple[np.ndar
     return rgb[y0 : y1 + 1, x0 : x1 + 1], mask[y0 : y1 + 1, x0 : x1 + 1], (x0, y0)
 
 
+def rounded_glyph_rescue_mask(
+    mask: np.ndarray,
+    glyph_bboxes: list[list[int]],
+    radius: float,
+) -> np.ndarray:
+    """Hide digit-shaped mask boundaries from a second LaMa pass.
+
+    The first inference keeps the original, tightly measured compositor mask.
+    If that mask shape is echoed as a dark outline, the rescue inference uses
+    rounded boxes around the eight glyphs.  Its generated pixels are still
+    copied only through ``mask``, so the outside-mask preservation guarantee is
+    unchanged.
+    """
+    boxes = np.zeros(mask.shape, dtype=bool)
+    height, width = mask.shape
+    padding = max(2, int(round(radius * 0.35)))
+    for x0, y0, x1, y1 in glyph_bboxes:
+        left = max(0, int(x0) - padding)
+        top = max(0, int(y0) - padding)
+        right = min(width - 1, int(x1) + padding)
+        bottom = min(height - 1, int(y1) + padding)
+        boxes[top : bottom + 1, left : right + 1] = True
+    rounding = max(1.0, radius * 0.25)
+    rescue = ndimage.binary_dilation(boxes, structure=disk(rounding)) | mask
+    if int(rescue.sum()) > int(mask.sum()) * 3:
+        raise RuntimeError("rescue inference mask exceeded its safety bound")
+    return rescue
+
+
+def timestamp_imprint_metrics(
+    original: np.ndarray,
+    candidate: np.ndarray,
+    core: np.ndarray,
+    mask: np.ndarray,
+    glyph_bboxes: list[list[int]],
+    radius: float,
+) -> dict[str, object]:
+    """Measure repeated dark outline carryover at the original glyph edges.
+
+    A scene edge may legitimately be dark.  A camera-date artifact is more
+    specific: it follows the dark source outline around several of the eight
+    detected glyphs.  This check therefore combines source evidence, local
+    candidate contrast, and repetition across glyphs instead of applying a
+    global darkness threshold.
+    """
+    if original.shape != candidate.shape or original.shape[:2] != core.shape:
+        raise ValueError("timestamp imprint inputs must share one image shape")
+    if mask.shape != core.shape or len(glyph_bboxes) != 8:
+        raise ValueError("timestamp imprint check requires the eight-glyph mask")
+
+    x0, y0, x1, y1 = bbox(mask)
+    padding = max(12, int(round(radius * 3.0)))
+    x0 = max(0, x0 - padding)
+    y0 = max(0, y0 - padding)
+    x1 = min(original.shape[1] - 1, x1 + padding)
+    y1 = min(original.shape[0] - 1, y1 + padding)
+    source = original[y0 : y1 + 1, x0 : x1 + 1]
+    result = candidate[y0 : y1 + 1, x0 : x1 + 1]
+    local_core = core[y0 : y1 + 1, x0 : x1 + 1]
+    local_mask = mask[y0 : y1 + 1, x0 : x1 + 1]
+    local_boxes = [
+        [int(left - x0), int(top - y0), int(right - x0), int(bottom - y0)]
+        for left, top, right, bottom in glyph_bboxes
+    ]
+
+    source_luma = source.astype(np.float64) @ LUMA
+    result_luma = result.astype(np.float64) @ LUMA
+    sigma = max(1.5, radius * 0.35)
+    source_smooth = ndimage.gaussian_filter(source_luma, sigma=sigma, mode="reflect")
+    result_smooth = ndimage.gaussian_filter(result_luma, sigma=sigma, mode="reflect")
+    ring = disk(max(2.0, min(radius * 0.58, 7.0)))
+
+    all_outline = np.zeros(local_core.shape, dtype=bool)
+    all_residual = np.zeros(local_core.shape, dtype=bool)
+    coherent_pixels_total = 0
+    per_glyph: list[dict[str, object]] = []
+    component_minimum = max(20, int(round(radius * 2.0)))
+    for left, top, right, bottom in local_boxes:
+        left = max(0, left)
+        top = max(0, top)
+        right = min(local_core.shape[1] - 1, right)
+        bottom = min(local_core.shape[0] - 1, bottom)
+        glyph = np.zeros(local_core.shape, dtype=bool)
+        glyph[top : bottom + 1, left : right + 1] = local_core[
+            top : bottom + 1, left : right + 1
+        ]
+        zone = ndimage.binary_dilation(glyph, structure=ring) & ~glyph & local_mask
+        source_outline = (
+            zone
+            & ((source_smooth - source_luma) >= 12.0)
+            & (source_luma <= 90.0)
+        )
+        darkness = result_smooth - result_luma
+        source_closer_than_local = (
+            np.abs(result_luma - source_luma) + 3.0
+            < np.abs(result_smooth - source_luma)
+        )
+        residual = source_outline & (darkness >= 7.0) & source_closer_than_local
+        outline_pixels = int(source_outline.sum())
+        residual_pixels = int(residual.sum())
+        fraction = float(residual_pixels / max(outline_pixels, 1))
+        labels, component_count = ndimage.label(
+            residual,
+            structure=np.ones((3, 3), dtype=np.uint8),
+        )
+        component_sizes = (
+            np.bincount(labels.ravel())[1:]
+            if component_count
+            else np.array([], dtype=np.int64)
+        )
+        coherent_pixels = int(component_sizes[component_sizes >= component_minimum].sum())
+        coherent_fraction = float(coherent_pixels / max(residual_pixels, 1))
+        largest_component = int(component_sizes.max()) if len(component_sizes) else 0
+        per_glyph.append(
+            {
+                "outline_pixels": outline_pixels,
+                "residual_pixels": residual_pixels,
+                "residual_fraction": fraction,
+                "coherent_pixels": coherent_pixels,
+                "coherent_fraction": coherent_fraction,
+                "largest_component_pixels": largest_component,
+            }
+        )
+        coherent_pixels_total += coherent_pixels
+        all_outline |= source_outline
+        all_residual |= residual
+
+    outline_pixels = int(all_outline.sum())
+    residual_pixels = int(all_residual.sum())
+    residual_fraction = float(residual_pixels / max(outline_pixels, 1))
+    affected_glyphs = sum(
+        int(item["residual_pixels"]) >= 12
+        and float(item["residual_fraction"]) >= 0.06
+        for item in per_glyph
+    )
+    coherent_fraction = float(coherent_pixels_total / max(residual_pixels, 1))
+    coherent_glyphs = sum(
+        int(item["coherent_pixels"]) >= component_minimum
+        and float(item["coherent_fraction"]) >= 0.25
+        for item in per_glyph
+    )
+    mean_luma_depth = (
+        float(np.mean((result_smooth - result_luma)[all_residual]))
+        if all_residual.any()
+        else 0.0
+    )
+    detected = bool(
+        residual_fraction >= TIMESTAMP_IMPRINT_FRACTION_LIMIT
+        and affected_glyphs >= TIMESTAMP_IMPRINT_AFFECTED_GLYPH_LIMIT
+        and coherent_fraction >= TIMESTAMP_IMPRINT_COHERENT_FRACTION_LIMIT
+        and coherent_glyphs >= TIMESTAMP_IMPRINT_COHERENT_GLYPH_LIMIT
+    )
+    return {
+        "detected": detected,
+        "outline_pixels": outline_pixels,
+        "residual_pixels": residual_pixels,
+        "residual_fraction": residual_fraction,
+        "affected_glyphs": int(affected_glyphs),
+        "coherent_pixels": coherent_pixels_total,
+        "coherent_fraction": coherent_fraction,
+        "coherent_glyphs": int(coherent_glyphs),
+        "coherent_component_minimum_pixels": component_minimum,
+        "mean_luma_depth": mean_luma_depth,
+        "fraction_limit": TIMESTAMP_IMPRINT_FRACTION_LIMIT,
+        "affected_glyph_limit": TIMESTAMP_IMPRINT_AFFECTED_GLYPH_LIMIT,
+        "coherent_fraction_limit": TIMESTAMP_IMPRINT_COHERENT_FRACTION_LIMIT,
+        "coherent_glyph_limit": TIMESTAMP_IMPRINT_COHERENT_GLYPH_LIMIT,
+        "per_glyph": per_glyph,
+    }
+
+
 def candidate_metrics(original: np.ndarray, candidate: np.ndarray, mask: np.ndarray) -> dict[str, float]:
     source = original.astype(np.float64)
     test = candidate.astype(np.float64)
@@ -600,49 +789,182 @@ def restore(
     mask: np.ndarray,
     radius: float,
     forced_method: str = "auto",
+    core: np.ndarray | None = None,
+    glyph_bboxes: list[list[int]] | None = None,
 ) -> tuple[np.ndarray, dict[str, object]]:
     padding = max(80, int(round(radius * 18)))
     crop, crop_mask, (x0, y0) = local_crop(rgb, mask, padding)
     if forced_method == "lama":
-        global _LAMA_MODEL
+        global _LAMA_MODEL, _LAMA_MODEL_PATH, _LAMA_MODEL_SHA256
         import torch
         from simple_lama_inpainting import SimpleLama
 
         torch.manual_seed(0)
         torch.set_num_threads(max(1, min(4, os.cpu_count() or 1)))
         torch.use_deterministic_algorithms(True)
-        if _LAMA_MODEL is None:
-            _LAMA_MODEL = SimpleLama()
         model_path = Path(os.environ.get("LAMA_MODEL", ""))
         if not model_path.is_file():
             model_path = Path(torch.hub.get_dir()) / "checkpoints" / "big-lama.pt"
         if not model_path.is_file():
+            # SimpleLama owns the upstream one-time download path.  Do not run
+            # inference until the downloaded bytes pass the pinned digest.
+            _LAMA_MODEL = SimpleLama()
+            model_path = Path(torch.hub.get_dir()) / "checkpoints" / "big-lama.pt"
+        if not model_path.is_file():
             raise RuntimeError("LaMa model file was not found after initialization")
-        model_sha256 = hashlib.sha256(model_path.read_bytes()).hexdigest()
-        if model_sha256 != EXPECTED_LAMA_SHA256:
+        resolved_model_path = model_path.resolve()
+        model_path_changed = _LAMA_MODEL_PATH != resolved_model_path
+        if model_path_changed or _LAMA_MODEL_SHA256 is None:
+            _LAMA_MODEL_SHA256 = sha256_file(model_path)
+        if _LAMA_MODEL_SHA256 != EXPECTED_LAMA_SHA256:
             raise RuntimeError(
-                f"unexpected LaMa model SHA-256: {model_sha256}; "
+                f"unexpected LaMa model SHA-256: {_LAMA_MODEL_SHA256}; "
                 f"expected {EXPECTED_LAMA_SHA256}"
             )
-        generated = np.asarray(
-            _LAMA_MODEL(
-                Image.fromarray(crop, mode="RGB"),
-                Image.fromarray(crop_mask.astype(np.uint8) * 255, mode="L"),
-            ).convert("RGB")
-        )[: crop.shape[0], : crop.shape[1]]
-        chosen = crop.copy()
-        chosen[crop_mask] = generated[crop_mask]
-        metrics = {"lama": candidate_metrics(crop, chosen, crop_mask)}
+        if _LAMA_MODEL is None or model_path_changed:
+            os.environ["LAMA_MODEL"] = str(resolved_model_path)
+            _LAMA_MODEL = SimpleLama()
+        _LAMA_MODEL_PATH = resolved_model_path
+
+        mkldnn_backend = getattr(getattr(torch, "backends", None), "mkldnn", None)
+        mkldnn_available = bool(
+            mkldnn_backend is not None and mkldnn_backend.is_available()
+        )
+        mkldnn_primary_enabled = bool(
+            mkldnn_backend is not None and mkldnn_backend.enabled
+        )
+
+        def run_lama(
+            inference_mask: np.ndarray,
+            *,
+            disable_mkldnn: bool = False,
+        ) -> np.ndarray:
+            previous_mkldnn = None
+            if disable_mkldnn and mkldnn_backend is not None:
+                previous_mkldnn = bool(mkldnn_backend.enabled)
+                mkldnn_backend.enabled = False
+            try:
+                generated = np.asarray(
+                    _LAMA_MODEL(
+                        Image.fromarray(crop, mode="RGB"),
+                        Image.fromarray(
+                            inference_mask.astype(np.uint8) * 255,
+                            mode="L",
+                        ),
+                    ).convert("RGB")
+                )[: crop.shape[0], : crop.shape[1]]
+            finally:
+                if previous_mkldnn is not None:
+                    mkldnn_backend.enabled = previous_mkldnn
+            composed = crop.copy()
+            composed[crop_mask] = generated[crop_mask]
+            return composed
+
+        primary = run_lama(crop_mask)
+        metrics = {"lama": candidate_metrics(crop, primary, crop_mask)}
+        chosen = primary
+        chosen_method = "lama"
+        primary_imprint: dict[str, object] | None = None
+        native_cpu_imprint: dict[str, object] | None = None
+        rescue_imprint: dict[str, object] | None = None
+        rescue_mask_pixels: int | None = None
+        imprint_check_applied = bool(core is not None and glyph_bboxes is not None)
+        if imprint_check_applied:
+            assert core is not None and glyph_bboxes is not None
+            crop_core = core[y0 : y0 + crop.shape[0], x0 : x0 + crop.shape[1]]
+            local_boxes = [
+                [
+                    int(left - x0),
+                    int(top - y0),
+                    int(right - x0),
+                    int(bottom - y0),
+                ]
+                for left, top, right, bottom in glyph_bboxes
+            ]
+            primary_imprint = timestamp_imprint_metrics(
+                crop,
+                primary,
+                crop_core,
+                crop_mask,
+                local_boxes,
+                radius,
+            )
+            if bool(primary_imprint["detected"]):
+                if mkldnn_available and mkldnn_primary_enabled:
+                    native_cpu = run_lama(crop_mask, disable_mkldnn=True)
+                    metrics["lama_native_cpu"] = candidate_metrics(
+                        crop,
+                        native_cpu,
+                        crop_mask,
+                    )
+                    native_cpu_imprint = timestamp_imprint_metrics(
+                        crop,
+                        native_cpu,
+                        crop_core,
+                        crop_mask,
+                        local_boxes,
+                        radius,
+                    )
+                    if not bool(native_cpu_imprint["detected"]):
+                        chosen = native_cpu
+                        chosen_method = "lama_native_cpu"
+
+                if chosen_method == "lama":
+                    rescue_mask = rounded_glyph_rescue_mask(
+                        crop_mask,
+                        local_boxes,
+                        radius,
+                    )
+                    rescue_mask_pixels = int(rescue_mask.sum())
+                    rescue = run_lama(
+                        rescue_mask,
+                        disable_mkldnn=mkldnn_available and mkldnn_primary_enabled,
+                    )
+                    metrics["lama_rescue"] = candidate_metrics(crop, rescue, crop_mask)
+                    rescue_imprint = timestamp_imprint_metrics(
+                        crop,
+                        rescue,
+                        crop_core,
+                        crop_mask,
+                        local_boxes,
+                        radius,
+                    )
+                    if bool(rescue_imprint["detected"]):
+                        raise RuntimeError(
+                            "Reconstruction left a possible dark timestamp outline "
+                            "after its rescue pass."
+                        )
+                    rescue_score = float(metrics["lama_rescue"]["score"])
+                    if not math.isfinite(rescue_score):
+                        raise RuntimeError(
+                            "The outline rescue produced invalid quality metrics."
+                        )
+                    chosen = rescue
+                    chosen_method = "lama_rescue"
+
+        final_imprint = rescue_imprint or native_cpu_imprint or primary_imprint
         final = rgb.copy()
         yy, xx = np.where(crop_mask)
         final[y0 + yy, x0 + xx] = chosen[yy, xx]
         return final, {
             "candidate_metrics": metrics,
-            "chosen_method": "lama",
+            "chosen_method": chosen_method,
             "inpainting_model": "big-lama TorchScript (fixed feed-forward CPU inference)",
-            "inpainting_model_sha256": model_sha256,
+            "inpainting_model_sha256": _LAMA_MODEL_SHA256,
             "torch_deterministic_algorithms": True,
             "torch_seed": 0,
+            "timestamp_imprint_check_applied": imprint_check_applied,
+            "timestamp_imprint_detected": bool(
+                final_imprint and final_imprint["detected"]
+            ),
+            "timestamp_imprint_rescue_used": chosen_method != "lama",
+            "timestamp_imprint_primary_metrics": primary_imprint,
+            "timestamp_imprint_native_cpu_metrics": native_cpu_imprint,
+            "timestamp_imprint_rescue_metrics": rescue_imprint,
+            "mkldnn_available": mkldnn_available,
+            "mkldnn_primary_enabled": mkldnn_primary_enabled,
+            "lama_primary_inference_mask_pixels": int(crop_mask.sum()),
+            "lama_rescue_inference_mask_pixels": rescue_mask_pixels,
             "local_crop_bbox_inclusive": [
                 x0,
                 y0,
@@ -703,8 +1025,27 @@ def process(
     original = np.asarray(canonical_image, dtype=np.uint8)
     core, mask, detection = detect_timestamp(original)
     final, restoration = restore(
-        original, mask, float(detection["mask_radius"]), forced_method=method
+        original,
+        mask,
+        float(detection["mask_radius"]),
+        forced_method=method,
+        core=core,
+        glyph_bboxes=detection["glyph_bboxes_inclusive"],
     )
+
+    final_imprint = timestamp_imprint_metrics(
+        original,
+        final,
+        core,
+        mask,
+        detection["glyph_bboxes_inclusive"],
+        float(detection["mask_radius"]),
+    )
+    restoration["timestamp_imprint_check_applied"] = True
+    restoration["timestamp_imprint_detected"] = bool(final_imprint["detected"])
+    restoration["timestamp_imprint_final_metrics"] = final_imprint
+    if bool(final_imprint["detected"]):
+        raise RuntimeError("Reconstruction left a possible dark timestamp outline.")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(final, mode="RGB").save(output_path, format="PNG", compress_level=6, optimize=False)
@@ -738,11 +1079,11 @@ def process(
         "timestamp_sequence_redetected": timestamp_redetected,
         "outside_mask_rgb_exact": bool(not outside.any()),
         "edited_area_percent": float(mask.sum() * 100.0 / mask.size),
-        "input_sha256": hashlib.sha256(input_path.read_bytes()).hexdigest(),
-        "output_sha256": hashlib.sha256(output_path.read_bytes()).hexdigest(),
+        "input_sha256": sha256_file(input_path),
+        "output_sha256": sha256_file(output_path),
         "output_format": "lossless PNG RGB, EXIF orientation normalized",
     }
-    if outside.any() or timestamp_redetected:
+    if outside.any() or timestamp_redetected or bool(final_imprint["detected"]):
         output_path.unlink(missing_ok=True)
         raise RuntimeError(f"verification failed: {json.dumps(report)}")
     if report_path:

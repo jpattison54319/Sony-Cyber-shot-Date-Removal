@@ -140,6 +140,8 @@ def process_tasks(
             audit_passed = bool(
                 report.get("outside_mask_rgb_exact")
                 and not report.get("timestamp_sequence_redetected")
+                and report.get("timestamp_imprint_check_applied")
+                and not report.get("timestamp_imprint_detected")
             )
             if not audit_passed:
                 raise RuntimeError("The output did not pass the workflow audit.")

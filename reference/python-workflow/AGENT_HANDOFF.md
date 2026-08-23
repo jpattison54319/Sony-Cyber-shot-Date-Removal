@@ -14,7 +14,8 @@ without weakening its core invariants.
 5. Every output is structurally reopened and decoded.
 6. Outside-mask RGB differences must equal zero.
 7. The timestamp detector must not redetect an eight-glyph sequence.
-8. Source, output, code, detector-profile, dependency, and model hashes remain
+8. A strong connected timestamp imprint must trigger rescue or fail closed.
+9. Source, output, code, detector-profile, dependency, and model hashes remain
    associated with the job.
 
 ## Suggested implementation order
@@ -42,4 +43,3 @@ applies only outside the recorded mask in canonical decoded RGB space.
 - Pin a container digest and test reproducibility on the deployment CPU.
 - Add detector profiles for other timestamp colors, fonts, layouts, and corners.
 - Add a manual-review state for low-confidence or edge-heavy reconstructions.
-

@@ -50,7 +50,13 @@ class BatchTests(unittest.TestCase):
                 report.write_text("{}")
                 if source.name == "bad.jpg":
                     raise RuntimeError("date not found")
-                return {"outside_mask_rgb_exact": True, "timestamp_sequence_redetected": False}
+                return {
+                    "outside_mask_rgb_exact": True,
+                    "timestamp_sequence_redetected": False,
+                    "remaining_orange_core_pixels_inside_mask": 0,
+                    "timestamp_imprint_check_applied": True,
+                    "timestamp_imprint_detected": False,
+                }
 
             results, manifest = process_tasks(
                 tasks,
@@ -65,6 +71,65 @@ class BatchTests(unittest.TestCase):
             self.assertEqual(payload["succeeded"], 1)
             self.assertEqual(payload["failed"], 1)
             self.assertIn((1, "failed"), statuses)
+
+    def test_process_tasks_rejects_a_visual_residue_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "photo.jpg"
+            source.write_bytes(b"photo")
+            tasks = prepare_tasks([source], root / "results")
+
+            def fake_process(_source, output, mask, report, _method):  # type: ignore[no-untyped-def]
+                for artifact in (output, mask, report):
+                    artifact.parent.mkdir(parents=True, exist_ok=True)
+                    artifact.write_bytes(b"artifact")
+                return {
+                    "outside_mask_rgb_exact": True,
+                    "timestamp_sequence_redetected": False,
+                    "remaining_orange_core_pixels_inside_mask": 0,
+                    "timestamp_imprint_check_applied": True,
+                    "timestamp_imprint_detected": True,
+                }
+
+            results, _ = process_tasks(
+                tasks,
+                fake_process,
+                lambda *_args: None,
+                lambda: False,
+            )
+            self.assertEqual(results[0].status, "failed")
+            self.assertIn("workflow audit", results[0].error or "")
+            self.assertFalse(tasks[0].output.exists())
+            self.assertFalse(tasks[0].mask.exists())
+            self.assertFalse(tasks[0].report.exists())
+
+    def test_process_tasks_allows_nondatelike_orange_scene_pixels(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "photo.jpg"
+            source.write_bytes(b"photo")
+            tasks = prepare_tasks([source], root / "results")
+
+            def fake_process(_source, output, mask, report, _method):  # type: ignore[no-untyped-def]
+                for artifact in (output, mask, report):
+                    artifact.parent.mkdir(parents=True, exist_ok=True)
+                    artifact.write_bytes(b"artifact")
+                return {
+                    "outside_mask_rgb_exact": True,
+                    "timestamp_sequence_redetected": False,
+                    "remaining_orange_core_pixels_inside_mask": 26011,
+                    "timestamp_imprint_check_applied": True,
+                    "timestamp_imprint_detected": False,
+                }
+
+            results, _ = process_tasks(
+                tasks,
+                fake_process,
+                lambda *_args: None,
+                lambda: False,
+            )
+            self.assertEqual(results[0].status, "succeeded")
+            self.assertTrue(results[0].audit_passed)
 
     def test_batch_root_is_predictable_and_non_overwriting(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

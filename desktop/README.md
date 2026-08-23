@@ -1,6 +1,6 @@
 # Desktop application
 
-The native app is a PySide6 interface around the unchanged audited
+The native app is a PySide6 interface around the audited
 `reference/python-workflow/bulk_timestamp_pipeline.py` processing entry point.
 It always calls `process(..., method="lama")`, reuses one local TorchScript
 model, processes photos sequentially, and keeps the original PNG, exact mask,
@@ -11,7 +11,10 @@ JSON audit report, and batch manifest together.
 - Photos never leave the computer.
 - Originals are never overwritten.
 - Failed detections produce no edited output.
-- Successful outputs must pass the original outside-mask and redetection audit.
+- Successful outputs must pass outside-mask exactness, date redetection, and
+  connected timestamp-imprint checks. A suspicious result receives bounded
+  backend and mask-shape rescue attempts; it fails without an edited output if
+  the imprint remains.
 - Each run receives a new results folder with `images`, `masks`, `reports`, and
   `manifest.json`.
 
