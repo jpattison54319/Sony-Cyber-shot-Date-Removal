@@ -4,9 +4,21 @@ import sys
 import threading
 from datetime import datetime
 from pathlib import Path
+from string import Template
 
 from PySide6.QtCore import QObject, Qt, QThread, QUrl, Signal, Slot
-from PySide6.QtGui import QColor, QCloseEvent, QDesktopServices, QFont, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
+from PySide6.QtGui import (
+    QColor,
+    QCloseEvent,
+    QDesktopServices,
+    QFont,
+    QIcon,
+    QKeySequence,
+    QPainter,
+    QPalette,
+    QPixmap,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -34,6 +46,60 @@ APP_NAME = "Date Stamp Cleaner"
 MAX_PHOTOS = 500
 ROW_DETAIL_ROLE = int(Qt.ItemDataRole.UserRole)
 ROW_STATUS_ROLE = ROW_DETAIL_ROLE + 1
+THEME = {
+    "canvas": "#171a16",
+    "canvas_raised": "#22261f",
+    "canvas_border": "#363c32",
+    "surface": "#fffdf8",
+    "surface_soft": "#f3f0e7",
+    "surface_hover": "#f8eadb",
+    "text": "#171a16",
+    "text_muted": "#5d6459",
+    "text_on_dark": "#fff9ed",
+    "text_muted_on_dark": "#bdc6b8",
+    "accent": "#b64a0a",
+    "accent_hover": "#963b06",
+    "accent_soft": "#f8dfc8",
+    "accent_text": "#873405",
+    "success": "#245b43",
+    "success_soft": "#e3f1e7",
+    "success_border": "#bad7c3",
+    "danger": "#8f3029",
+    "danger_soft": "#fbeae6",
+    "danger_border": "#e6b9b1",
+    "border": "#d8d3c6",
+    "border_strong": "#b7b1a3",
+    "disabled_text": "#777b72",
+    "disabled_bg": "#e4e1d8",
+}
+
+
+def apply_application_theme(application: QApplication) -> None:
+    """Use one explicit palette so host light/dark settings cannot erase content."""
+    application.setStyle("Fusion")
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window, QColor(THEME["canvas"]))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(THEME["text"]))
+    palette.setColor(QPalette.ColorRole.Base, QColor(THEME["surface"]))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(THEME["surface_soft"]))
+    palette.setColor(QPalette.ColorRole.Text, QColor(THEME["text"]))
+    palette.setColor(QPalette.ColorRole.Button, QColor(THEME["surface"]))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(THEME["text"]))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(THEME["accent_soft"]))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(THEME["text"]))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(THEME["surface"]))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(THEME["text"]))
+    palette.setColor(
+        QPalette.ColorGroup.Disabled,
+        QPalette.ColorRole.Text,
+        QColor(THEME["disabled_text"]),
+    )
+    palette.setColor(
+        QPalette.ColorGroup.Disabled,
+        QPalette.ColorRole.ButtonText,
+        QColor(THEME["disabled_text"]),
+    )
+    application.setPalette(palette)
 
 
 def _format_bytes(size: int) -> str:
@@ -98,12 +164,30 @@ class PhotoTable(QTableWidget):
         if self.rowCount() != 0:
             return
         painter = QPainter(self.viewport())
-        painter.setPen(QColor("#77786f"))
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        center = self.viewport().rect().center()
         font = painter.font()
-        font.setPointSize(14)
+        font.setPointSize(15)
         font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(font)
-        painter.drawText(self.viewport().rect().adjusted(24, 0, -24, -10), Qt.AlignmentFlag.AlignCenter, "Drop photos here\nor choose photos")
+        painter.setPen(QColor(THEME["text"]))
+        painter.drawText(
+            self.viewport().rect().adjusted(24, 0, -24, -24),
+            Qt.AlignmentFlag.AlignCenter,
+            "Drop photos here",
+        )
+        font.setPointSize(11)
+        font.setWeight(QFont.Weight.Normal)
+        painter.setFont(font)
+        painter.setPen(QColor(THEME["text_muted"]))
+        painter.drawText(
+            24,
+            center.y() + 22,
+            self.viewport().width() - 48,
+            28,
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+            "or choose JPG and PNG photos",
+        )
 
 
 class ProcessingWorker(QObject):
@@ -158,7 +242,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(_app_icon())
         self.resize(920, 680)
-        self.setMinimumSize(760, 560)
+        self.setMinimumSize(760, 680)
 
         self.sources: list[Path] = []
         self.output_parent = Path.home() / "Pictures"
@@ -175,11 +259,17 @@ class MainWindow(QMainWindow):
         page.setSpacing(18)
 
         header = QHBoxLayout()
+        header.setSpacing(14)
+        brand_mark = QLabel()
+        brand_mark.setObjectName("brandMark")
+        brand_mark.setPixmap(_app_icon().pixmap(52, 52))
+        brand_mark.setFixedSize(52, 52)
+        header.addWidget(brand_mark)
         heading = QVBoxLayout()
         heading.setSpacing(3)
         title = QLabel(APP_NAME)
         title.setObjectName("title")
-        subtitle = QLabel("Remove Sony Cyber-shot dates with the validated local workflow.")
+        subtitle = QLabel("Remove Sony Cyber-shot date stamps locally.")
         subtitle.setObjectName("subtitle")
         heading.addWidget(title)
         heading.addWidget(subtitle)
@@ -195,7 +285,7 @@ class MainWindow(QMainWindow):
         trust_layout = QHBoxLayout(trust)
         trust_layout.setContentsMargins(18, 11, 18, 11)
         trust_layout.setSpacing(24)
-        for text in ("Exact Python workflow", "Originals untouched", "Verified lossless PNG"):
+        for text in ("Exact workflow", "Originals stay untouched", "Verified lossless PNG"):
             label = QLabel(f"✓  {text}")
             label.setObjectName("trustItem")
             trust_layout.addWidget(label)
@@ -301,7 +391,7 @@ class MainWindow(QMainWindow):
         card_layout.addLayout(actions)
         page.addWidget(card, 1)
 
-        footnote = QLabel("Photos never leave this computer. Hidden pixels are reconstructed; pixels outside the timestamp mask are verified unchanged.")
+        footnote = QLabel("Photos stay on this computer. Only the detected date area is reconstructed.")
         footnote.setObjectName("footnote")
         footnote.setWordWrap(True)
         page.addWidget(footnote)
@@ -314,42 +404,53 @@ class MainWindow(QMainWindow):
 
     def _apply_style(self) -> None:
         self.setStyleSheet(
-            """
-            QWidget#page { background: #f4f1e8; color: #171814; }
-            QLabel#title { font-size: 30px; font-weight: 800; letter-spacing: -1px; }
-            QLabel#subtitle { color: #67695f; font-size: 14px; }
-            QLabel#localBadge { color: #315f4c; background: #e3f0e7; border: 1px solid #cfe2d5; border-radius: 12px; padding: 7px 11px; font-size: 11px; font-weight: 800; }
-            QFrame#trustStrip { background: #eeebe1; border: 1px solid #d9d5c8; border-radius: 12px; }
-            QLabel#trustItem { color: #3f5f4f; font-size: 12px; font-weight: 650; }
-            QFrame#card { background: #fffdf7; border: 1px solid #d9d5c8; border-radius: 18px; }
-            QLabel#sectionLabel, QLabel#smallLabel { color: #a94d08; font-size: 10px; font-weight: 800; letter-spacing: 1px; }
-            QTableWidget { color: #171814; background: #fbf9f2; alternate-background-color: #f7f4ec; border: 1px dashed #bdb8a9; border-radius: 12px; selection-background-color: #f8e5cf; selection-color: #171814; outline: none; }
-            QTableWidget::item { color: #171814; border-bottom: 1px solid #ebe7dd; padding: 9px; }
-            QTableWidget::item:selected { color: #171814; background: #f8e5cf; }
-            QTableWidget::item:hover { color: #171814; background: #f3eadf; }
-            QHeaderView::section { color: #77786f; background: #eeebe1; border: none; border-bottom: 1px solid #d9d5c8; padding: 8px; font-size: 10px; font-weight: 700; }
-            QFrame#detailPanel { background: #f8f6ef; border: 1px solid #ded9cc; border-radius: 10px; }
-            QFrame#detailPanel[kind="error"] { background: #fff4f0; border-color: #e8c3bd; }
-            QFrame#detailPanel[kind="success"] { background: #eef7f1; border-color: #c7dfcf; }
-            QLabel#detailTitle { color: #23251f; border: none; font-size: 12px; font-weight: 750; }
-            QLabel#detailBody { color: #5d5f56; border: none; font-size: 12px; }
-            QFrame#detailPanel[kind="error"] QLabel#detailTitle { color: #92352d; }
-            QFrame#detailPanel[kind="success"] QLabel#detailTitle { color: #315f4c; }
-            QFrame#destination { background: #f8f6ef; border: 1px solid #e6e1d5; border-radius: 10px; }
-            QLabel#pathLabel { color: #4d4f47; font-size: 12px; }
-            QLabel#statusLabel { color: #67695f; font-size: 12px; }
-            QLabel#footnote { color: #67695f; font-size: 11px; }
-            QPushButton { min-height: 38px; padding: 0 14px; border-radius: 9px; font-size: 12px; font-weight: 700; }
-            QPushButton#primaryButton { min-height: 44px; color: #fffaf3; background: #23251f; border: 1px solid #23251f; padding: 0 18px; }
-            QPushButton#primaryButton:hover { background: #34362f; }
-            QPushButton#secondaryButton { color: #23251f; background: #f8f6ef; border: 1px solid #d9d5c8; }
-            QPushButton#secondaryButton:hover, QPushButton#quietButton:hover { background: #eeebe1; }
-            QPushButton#quietButton { color: #5d5f56; background: transparent; border: 1px solid transparent; padding: 0 10px; }
-            QPushButton#dangerButton { color: #a83d32; background: #fff4f0; border: 1px solid #e8c3bd; }
-            QPushButton:disabled { color: #9b9c94; background: #ece9e0; border-color: #e1ddd2; }
-            QProgressBar { min-height: 7px; max-height: 7px; background: #ebe8df; border: none; border-radius: 3px; }
-            QProgressBar::chunk { background: #f08a24; border-radius: 3px; }
-            """
+            Template(
+                """
+                QMainWindow, QWidget#page { background: $canvas; }
+                QLabel { color: $text; background: transparent; }
+                QLabel#brandMark { background: $canvas_raised; border: 1px solid $canvas_border; border-radius: 14px; padding: 0; }
+                QLabel#title { color: $text_on_dark; font-size: 31px; font-weight: 800; letter-spacing: -1px; }
+                QLabel#subtitle { color: $text_muted_on_dark; font-size: 14px; }
+                QLabel#localBadge { color: $success; background: $success_soft; border: 1px solid $success_border; border-radius: 13px; padding: 8px 12px; font-size: 11px; font-weight: 800; }
+                QFrame#trustStrip { background: $canvas_raised; border: 1px solid $canvas_border; border-radius: 12px; }
+                QLabel#trustItem { color: $text_muted_on_dark; font-size: 12px; font-weight: 650; }
+                QFrame#card { background: $surface; border: 1px solid $border; border-radius: 18px; }
+                QLabel#sectionLabel, QLabel#smallLabel { color: $accent_text; font-size: 10px; font-weight: 800; letter-spacing: 1px; }
+                QTableWidget { color: $text; background: $surface; alternate-background-color: $surface_soft; border: 1px dashed $border_strong; border-radius: 12px; selection-background-color: $accent_soft; selection-color: $text; outline: none; }
+                QTableWidget:focus { border: 2px solid $accent; }
+                QTableWidget::item { color: $text; border-bottom: 1px solid $border; padding: 9px; }
+                QTableWidget::item:selected { color: $text; background: $accent_soft; }
+                QTableWidget::item:hover { color: $text; background: $surface_hover; }
+                QHeaderView::section { color: $text_muted; background: $surface_soft; border: none; border-bottom: 1px solid $border; padding: 8px; font-size: 10px; font-weight: 750; }
+                QFrame#detailPanel { background: $surface_soft; border: 1px solid $border; border-radius: 10px; }
+                QFrame#detailPanel[kind="error"] { background: $danger_soft; border-color: $danger_border; }
+                QFrame#detailPanel[kind="success"] { background: $success_soft; border-color: $success_border; }
+                QLabel#detailTitle { color: $text; border: none; font-size: 12px; font-weight: 750; }
+                QLabel#detailBody { color: $text_muted; border: none; font-size: 12px; }
+                QFrame#detailPanel[kind="error"] QLabel#detailTitle { color: $danger; }
+                QFrame#detailPanel[kind="success"] QLabel#detailTitle { color: $success; }
+                QFrame#destination { background: $surface_soft; border: 1px solid $border; border-radius: 10px; }
+                QLabel#pathLabel { color: $text_muted; font-size: 12px; }
+                QLabel#statusLabel { color: $text_muted; font-size: 12px; }
+                QLabel#footnote { color: $text_muted_on_dark; font-size: 11px; }
+                QToolTip { color: $text; background: $surface; border: 1px solid $border_strong; padding: 6px; }
+                QPushButton { min-height: 38px; color: $text; background: $surface; border: 1px solid $border; padding: 0 14px; border-radius: 9px; font-size: 12px; font-weight: 700; }
+                QPushButton:hover { background: $surface_hover; border-color: $border_strong; }
+                QPushButton:focus { border: 2px solid $accent; }
+                QPushButton#primaryButton { min-height: 44px; color: $text_on_dark; background: $accent; border: 1px solid $accent; padding: 0 19px; }
+                QPushButton#primaryButton:hover { background: $accent_hover; border-color: $accent_hover; }
+                QPushButton#primaryButton:disabled { color: $disabled_text; background: $disabled_bg; border-color: $border; }
+                QPushButton#secondaryButton { color: $text; background: $surface; border: 1px solid $border_strong; }
+                QPushButton#quietButton { color: $text_muted; background: transparent; border: 1px solid transparent; padding: 0 10px; }
+                QPushButton#secondaryButton:hover, QPushButton#quietButton:hover { color: $text; background: $surface_hover; }
+                QPushButton#secondaryButton:disabled, QPushButton#quietButton:disabled { color: $disabled_text; background: transparent; border-color: transparent; }
+                QPushButton#dangerButton { color: $danger; background: $danger_soft; border: 1px solid $danger_border; }
+                QPushButton#dangerButton:hover { background: $danger_border; }
+                QPushButton:disabled { color: $disabled_text; background: $disabled_bg; border-color: $border; }
+                QProgressBar { min-height: 8px; max-height: 8px; background: $disabled_bg; border: none; border-radius: 4px; }
+                QProgressBar::chunk { background: $accent; border-radius: 4px; }
+                """
+            ).substitute(THEME)
         )
 
     @Slot()
@@ -631,6 +732,7 @@ def main() -> int:
     application.setApplicationName(APP_NAME)
     application.setOrganizationName("Date Stamp Cleaner")
     application.setWindowIcon(_app_icon())
+    apply_application_theme(application)
     window = MainWindow()
     window.show()
     return application.exec()

@@ -9,14 +9,32 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
-from date_stamp_cleaner.app import MainWindow
+from date_stamp_cleaner.app import THEME, MainWindow, apply_application_theme
 from date_stamp_cleaner.batch import PhotoResult
+
+
+def _relative_luminance(color: str) -> float:
+    channels = [int(color[index : index + 2], 16) / 255 for index in (1, 3, 5)]
+    linear = [
+        value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4
+        for value in channels
+    ]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def _contrast_ratio(first: str, second: str) -> float:
+    lighter, darker = sorted(
+        (_relative_luminance(first), _relative_luminance(second)),
+        reverse=True,
+    )
+    return (lighter + 0.05) / (darker + 0.05)
 
 
 class MainWindowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.application = QApplication.instance() or QApplication([])
+        apply_application_theme(cls.application)
 
     def setUp(self) -> None:
         self.window = MainWindow()
@@ -81,11 +99,22 @@ class MainWindowTests(unittest.TestCase):
                 "No photos were cleaned. See the error below the photo list.",
             )
 
-    def test_table_text_has_explicit_normal_selected_and_hover_contrast(self) -> None:
+    def test_theme_has_explicit_title_table_and_disabled_button_colors(self) -> None:
         style = self.window.styleSheet()
-        self.assertIn("QTableWidget { color: #171814;", style)
-        self.assertIn("QTableWidget::item:selected { color: #171814;", style)
-        self.assertIn("QTableWidget::item:hover { color: #171814;", style)
+        self.assertIn(f"QLabel#title {{ color: {THEME['text_on_dark']};", style)
+        self.assertIn(f"QTableWidget {{ color: {THEME['text']};", style)
+        self.assertIn(f"QTableWidget::item:selected {{ color: {THEME['text']};", style)
+        self.assertIn("QPushButton#primaryButton:disabled", style)
+
+    def test_essential_theme_pairings_meet_wcag_contrast(self) -> None:
+        self.assertGreaterEqual(_contrast_ratio(THEME["text_on_dark"], THEME["canvas"]), 7.0)
+        self.assertGreaterEqual(_contrast_ratio(THEME["text"], THEME["surface"]), 7.0)
+        self.assertGreaterEqual(_contrast_ratio(THEME["text_muted"], THEME["surface"]), 4.5)
+        self.assertGreaterEqual(_contrast_ratio(THEME["text_on_dark"], THEME["accent"]), 4.5)
+
+    def test_window_cannot_resize_below_complete_layout(self) -> None:
+        self.assertGreaterEqual(self.window.minimumWidth(), 760)
+        self.assertGreaterEqual(self.window.minimumHeight(), 680)
 
 
 if __name__ == "__main__":
