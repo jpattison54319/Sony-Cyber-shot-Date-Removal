@@ -522,6 +522,17 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
     return;
   }
 
+  if (request.type === "prepare-model") {
+    try {
+      const model = await createModelSession(request.id, request.preferWebGpu);
+      post({ type: "prepared", id: request.id, provider: model.provider });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The restoration model could not be prepared.";
+      post({ type: "error", id: request.id, message, code: "model-failed" });
+    }
+    return;
+  }
+
   try {
     const result = await processImage(request.id, request.file, request.preferWebGpu);
     post({ type: "result", id: request.id, result });

@@ -26,7 +26,7 @@ import {
   X,
 } from "lucide-react";
 import Image from "next/image";
-import type { DragEvent as ReactDragEvent } from "react";
+import type { ChangeEvent, DragEvent as ReactDragEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import {
@@ -35,7 +35,7 @@ import {
   reserveUniqueOutputName,
   validateFile,
 } from "@/lib/file-rules";
-import type { ExecutionProvider, ProcessedImage, ProcessingStage } from "@/lib/processing-types";
+import type { ExecutionProvider, ProcessedImage, ProcessingStage, WorkerResponse } from "@/lib/processing-types";
 import { ProcessingError, ProcessorClient } from "@/lib/worker-client";
 
 type QueueStatus = "ready" | "processing" | "complete" | "skipped" | "failed" | "canceled";
@@ -62,7 +62,6 @@ type ModelState = "waiting" | "checking" | "verified" | "error";
 interface RuntimeStatus {
   modelState: ModelState;
   modelProgress: number;
-  modelDetail: string;
   provider: ExecutionProvider | null;
 }
 
@@ -149,8 +148,9 @@ function statusIcon(item: QueueItem) {
 }
 
 export function CleanerApp() {
-  const inputRef = useRef<HTMLInputElement>(null);
   const processorRef = useRef<ProcessorClient | null>(null);
+  const modelPreparationRef = useRef<Promise<ExecutionProvider> | null>(null);
+  const modelReadyRef = useRef(false);
   const canceledRef = useRef(false);
   const dragDepthRef = useRef(0);
   const previewRef = useRef<PreviewPair | null>(null);
@@ -163,7 +163,6 @@ export function CleanerApp() {
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus>({
     modelState: "waiting",
     modelProgress: 0,
-    modelDetail: "A saved model is checked—or a fresh one downloaded—when you start.",
     provider: null,
   });
   const hasWebGpu = useSyncExternalStore(
@@ -180,11 +179,14 @@ export function CleanerApp() {
   const canAddFiles = !isRunning
     && queue.length < batchLimit
     && queue.every((item) => item.status === "ready");
-  const remainingSlots = Math.max(0, batchLimit - queue.length);
 
   useEffect(() => {
     return () => {
-      processorRef.current?.terminate("The page was closed.");
+      const processor = processorRef.current;
+      processorRef.current = null;
+      modelPreparationRef.current = null;
+      modelReadyRef.current = false;
+      processor?.terminate("The page was closed.");
       if (previewRef.current) {
         URL.revokeObjectURL(previewRef.current.beforeUrl);
         URL.revokeObjectURL(previewRef.current.afterUrl);
@@ -203,6 +205,65 @@ export function CleanerApp() {
     }
     previewRef.current = null;
     setPreview(null);
+  }, []);
+
+  const handleRuntimeProgress = useCallback(
+    (message: Extract<WorkerResponse, { type: "progress" }>) => {
+      if (message.stage === "model-download") {
+        setRuntimeStatus((current) => ({
+          ...current,
+          modelState: message.modelVerified ? "verified" : "checking",
+          modelProgress: Math.min(1, Math.max(0, message.progress ?? current.modelProgress)),
+        }));
+      }
+      if (message.provider) {
+        setRuntimeStatus({
+          modelState: "verified",
+          modelProgress: 1,
+          provider: message.provider,
+        });
+      }
+    },
+    [],
+  );
+
+  const prepareModel = useCallback(() => {
+    if (modelReadyRef.current || modelPreparationRef.current) return;
+    const processor = processorRef.current ?? new ProcessorClient();
+    processorRef.current = processor;
+    const preparation = processor.prepare(
+      `prepare-${crypto.randomUUID()}`,
+      true,
+      handleRuntimeProgress,
+    );
+    modelPreparationRef.current = preparation;
+    setRuntimeStatus((current) => ({ ...current, modelState: "checking", modelProgress: 0 }));
+
+    void preparation
+      .then((provider) => {
+        if (processorRef.current !== processor) return;
+        modelReadyRef.current = true;
+        setRuntimeStatus({ modelState: "verified", modelProgress: 1, provider });
+      })
+      .catch((error) => {
+        if (processorRef.current !== processor) return;
+        if (!(error instanceof ProcessingError)) processorRef.current = null;
+        modelReadyRef.current = false;
+        setRuntimeStatus({ modelState: "error", modelProgress: 0, provider: null });
+      })
+      .finally(() => {
+        if (modelPreparationRef.current === preparation) modelPreparationRef.current = null;
+      });
+  }, [handleRuntimeProgress]);
+
+  const cancelPendingModelPreparation = useCallback(() => {
+    if (!modelPreparationRef.current) return;
+    const processor = processorRef.current;
+    processorRef.current = null;
+    modelPreparationRef.current = null;
+    modelReadyRef.current = false;
+    processor?.terminate("Model preparation canceled.");
+    setRuntimeStatus({ modelState: "waiting", modelProgress: 0, provider: null });
   }, []);
 
   const addFiles = useCallback(
@@ -234,18 +295,22 @@ export function CleanerApp() {
         errors.push(`This browser can add ${batchLimit} photos per batch; ${available} slots were available.`);
       }
       if (errors.length > 0) setNotice(errors.slice(0, 3).join(" "));
-      if (next.length > 0) setQueue((current) => [...current, ...next]);
+      if (next.length > 0) {
+        setQueue((current) => [...current, ...next]);
+        prepareModel();
+      }
     },
-    [batchLimit, queue.length, resetPreview],
+    [batchLimit, prepareModel, queue.length, resetPreview],
   );
 
-  const openFilePicker = useCallback(() => {
-    if (!canAddFiles) return;
-    if (inputRef.current) {
-      inputRef.current.value = "";
-      inputRef.current.click();
-    }
-  }, [canAddFiles]);
+  const handleFileSelection = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(event.currentTarget.files ?? []);
+      event.currentTarget.value = "";
+      addFiles(files);
+    },
+    [addFiles],
+  );
 
   const handleDragEnter = useCallback(
     (event: ReactDragEvent<HTMLElement>) => {
@@ -292,20 +357,21 @@ export function CleanerApp() {
 
   const clearQueue = useCallback(() => {
     if (isRunning) return;
+    cancelPendingModelPreparation();
     setQueue([]);
     setNotice(null);
     setLastDownload(null);
     resetPreview();
-    if (inputRef.current) inputRef.current.value = "";
-  }, [isRunning, resetPreview]);
+  }, [cancelPendingModelPreparation, isRunning, resetPreview]);
 
   const removeItem = useCallback(
     (id: string) => {
       if (isRunning) return;
+      if (queue.length === 1) cancelPendingModelPreparation();
       setQueue((current) => current.filter((item) => item.id !== id));
       resetPreview();
     },
-    [isRunning, resetPreview],
+    [cancelPendingModelPreparation, isRunning, queue.length, resetPreview],
   );
 
   const completed = useMemo(() => queue.filter((item) => item.status === "complete").length, [queue]);
@@ -319,24 +385,19 @@ export function CleanerApp() {
   }, [queue]);
 
   const modeLabel = runtimeStatus.provider === "webgpu"
-    ? "WebGPU active"
+    ? "WebGPU"
     : runtimeStatus.provider === "wasm"
-      ? "Compatibility mode active"
+      ? "Compatibility"
       : hasWebGpu
         ? "WebGPU available"
-        : "Compatibility mode";
-  const modeDetail = runtimeStatus.provider
-    ? "Actual local mode selected for this tab."
-    : hasWebGpu
-      ? "GPU acceleration will be tried first."
-      : "Private WebAssembly processing; it may take longer.";
-  const modelLabel = ({
-    waiting: "Not checked yet",
-    checking: "Preparing model",
-    verified: "Integrity verified",
-    error: "Model unavailable",
-  } satisfies Record<ModelState, string>)[runtimeStatus.modelState];
+        : "Compatibility";
   const modelPercent = Math.round(runtimeStatus.modelProgress * 100);
+  const modelLabel = ({
+    waiting: "Starts after photo",
+    checking: `Loading ${modelPercent}%`,
+    verified: "Verified",
+    error: "Download failed",
+  } satisfies Record<ModelState, string>)[runtimeStatus.modelState];
 
   const processOne = useCallback(
     async (item: QueueItem): Promise<ProcessedImage | null> => {
@@ -346,32 +407,14 @@ export function CleanerApp() {
       updateItem(item.id, { status: "processing", detail: "Starting…", progress: 1 });
       if (!processorRef.current) {
         processorRef.current = new ProcessorClient();
+        modelReadyRef.current = false;
         setRuntimeStatus((current) => ({ ...current, provider: null }));
       }
       try {
         const result = await processorRef.current.process(item.id, item.file, true, (message) => {
           lastStage = message.stage;
-          if (message.stage === "model-download") {
-            if (message.modelVerified) verifiedDuringAttempt = true;
-            setRuntimeStatus((current) => ({
-              ...current,
-              modelState: message.modelVerified ? "verified" : "checking",
-              modelProgress: Math.min(1, Math.max(0, message.progress ?? current.modelProgress)),
-              modelDetail: message.detail ?? "Preparing the private restoration model.",
-            }));
-          }
-          if (message.provider) {
-            verifiedDuringAttempt = true;
-            setRuntimeStatus((current) => ({
-              ...current,
-              modelState: "verified",
-              modelProgress: 1,
-              modelDetail: current.modelState === "verified"
-                ? current.modelDetail
-                : "SHA-256 matched before the model was used.",
-              provider: message.provider ?? current.provider,
-            }));
-          }
+          if (message.modelVerified || message.provider) verifiedDuringAttempt = true;
+          handleRuntimeProgress(message);
           const [start, end] = STAGE_PROGRESS[message.stage];
           const stageProgress = message.progress ?? 0;
           updateItem(item.id, {
@@ -385,15 +428,12 @@ export function CleanerApp() {
           detail: "Verified and ready",
           progress: 100,
         });
-        setRuntimeStatus((current) => ({
-          ...current,
+        modelReadyRef.current = true;
+        setRuntimeStatus({
           modelState: "verified",
           modelProgress: 1,
-          modelDetail: current.modelState === "verified"
-            ? current.modelDetail
-            : "SHA-256 matched before the model was used.",
           provider: result.report.executionProvider,
-        }));
+        });
         return result;
       } catch (error) {
         if (canceledRef.current) {
@@ -406,7 +446,6 @@ export function CleanerApp() {
             ...current,
             modelState: "error",
             modelProgress: 0,
-            modelDetail: message,
             provider: null,
           }));
         }
@@ -418,7 +457,7 @@ export function CleanerApp() {
         return null;
       }
     },
-    [updateItem],
+    [handleRuntimeProgress, updateItem],
   );
 
   const beginProcessing = useCallback(async () => {
@@ -519,12 +558,13 @@ export function CleanerApp() {
     canceledRef.current = true;
     processorRef.current?.terminate();
     processorRef.current = null;
+    modelPreparationRef.current = null;
+    modelReadyRef.current = false;
     dragDepthRef.current = 0;
     setIsDragging(false);
     setRuntimeStatus({
       modelState: "waiting",
       modelProgress: 0,
-      modelDetail: "Canceled safely; the model will be checked again on retry.",
       provider: null,
     });
     setQueue((current) =>
@@ -542,10 +582,11 @@ export function CleanerApp() {
     if (isRunning) return;
     processorRef.current?.terminate("Restarting the processor.");
     processorRef.current = null;
+    modelPreparationRef.current = null;
+    modelReadyRef.current = false;
     setRuntimeStatus({
       modelState: "waiting",
       modelProgress: 0,
-      modelDetail: "The saved model will be checked again when processing restarts.",
       provider: null,
     });
     setQueue((current) =>
@@ -576,12 +617,8 @@ export function CleanerApp() {
       </header>
 
       <section className="hero" id="top">
-        <div className="eyebrow"><span className="status-light" /> Tuned for orange camera dates</div>
         <h1>Keep the photo.<br /><span>Lose the timestamp.</span></h1>
-        <p className="hero-copy">
-          Remove the orange <strong>MM DD YYYY</strong> date added by many Sony Cyber-shot cameras.
-          Your photos are reconstructed privately in this browser and never uploaded.
-        </p>
+        <p className="hero-copy">Remove orange Sony Cyber-shot dates.</p>
 
         <section
           className={`workspace-shell ${isDragging ? "is-dragging" : ""}`}
@@ -591,49 +628,30 @@ export function CleanerApp() {
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
         >
-          <input
-            ref={inputRef}
-            className="visually-hidden"
-            type="file"
-            accept="image/jpeg,image/png,.jpg,.jpeg,.png"
-            multiple
-            aria-label="Choose one or more photos"
-            onChange={(event) => {
-              const files = Array.from(event.currentTarget.files ?? []);
-              event.currentTarget.value = "";
-              addFiles(files);
-            }}
-          />
           <div className="workspace-topbar">
             <div>
-              <span className="label" id="workspace-title">LOCAL WORKSPACE</span>
+              <span className="label" id="workspace-title">LOCAL</span>
               <span className="ready"><span /> {isRunning ? `${overallProgress}% complete` : "Ready"}</span>
             </div>
-            <span>LOCAL ONLY · JPG · PNG</span>
           </div>
 
           <div className="runtime-strip" role="group" aria-label="Local processing readiness">
             <div className={`runtime-item mode-${runtimeStatus.provider ?? (hasWebGpu ? "webgpu" : "wasm")}`}>
-              <span className="runtime-icon" aria-hidden="true"><Cpu size={20} /></span>
+              <span className="runtime-icon" aria-hidden="true"><Cpu size={18} /></span>
               <span className="runtime-copy">
-                <span className="runtime-label">PROCESSING MODE</span>
+                <span className="runtime-label">MODE</span>
                 <strong>{modeLabel}</strong>
-                <span className="runtime-detail">{modeDetail}</span>
               </span>
             </div>
             <div className={`runtime-item model-${runtimeStatus.modelState}`}>
               <span className="runtime-icon" aria-hidden="true">
-                {runtimeStatus.modelState === "checking" ? <LoaderCircle className="spin" size={20} /> :
-                  runtimeStatus.modelState === "verified" ? <ShieldCheck size={20} /> :
-                    runtimeStatus.modelState === "error" ? <AlertCircle size={20} /> : <Download size={20} />}
+                {runtimeStatus.modelState === "checking" ? <LoaderCircle className="spin" size={18} /> :
+                  runtimeStatus.modelState === "verified" ? <ShieldCheck size={18} /> :
+                    runtimeStatus.modelState === "error" ? <AlertCircle size={18} /> : <Download size={18} />}
               </span>
               <span className="runtime-copy">
-                <span className="runtime-label">RESTORATION MODEL</span>
-                <span className="runtime-title-row">
-                  <strong aria-live="polite">{modelLabel}</strong>
-                  {runtimeStatus.modelState === "checking" && <b>{modelPercent}%</b>}
-                </span>
-                <span className="runtime-detail">{runtimeStatus.modelDetail}</span>
+                <span className="runtime-label">MODEL</span>
+                <strong aria-live="polite">{modelLabel}</strong>
                 {runtimeStatus.modelState === "checking" && (
                   <span
                     className="runtime-progress"
@@ -653,13 +671,19 @@ export function CleanerApp() {
           {queue.length === 0 ? (
             <div className={`drop-zone ${isDragging ? "is-dragging" : ""}`}>
               <span className="upload-icon"><Upload size={26} strokeWidth={1.8} /></span>
-              <span className="drop-title">Choose one photo or a whole batch</span>
-              <button className="primary-button picker-button" type="button" onClick={openFilePicker}>
+              <span className="drop-title desktop-drop-copy">Drop photos here</span>
+              <label className="primary-button picker-button file-picker-control">
                 <Images size={18} /> Choose photos
-              </button>
-              <span className="drop-copy desktop-drop-copy">or drag and drop JPG or PNG files here</span>
-              <span className="drop-copy mobile-picker-copy">Select one photo or multiple photos from your library or Files.</span>
-              <span className="file-hint">Up to {batchLimit} photos per batch · 30 MB each</span>
+                <input
+                  className="native-file-input"
+                  type="file"
+                  accept="image/jpeg,image/png,.jpg,.jpeg,.png"
+                  multiple
+                  aria-label="Choose one or more photos"
+                  onChange={handleFileSelection}
+                />
+              </label>
+              <span className="file-hint">JPG or PNG · {batchLimit} max</span>
             </div>
           ) : (
             <div className="queue-panel">
@@ -671,9 +695,17 @@ export function CleanerApp() {
                 {!isRunning && (
                   <div className="queue-heading-actions">
                     {canAddFiles && (
-                      <button className="add-photos-button" type="button" onClick={openFilePicker}>
+                      <label className="add-photos-button file-picker-control">
                         <ImagePlus size={17} /> Add photos
-                      </button>
+                        <input
+                          className="native-file-input"
+                          type="file"
+                          accept="image/jpeg,image/png,.jpg,.jpeg,.png"
+                          multiple
+                          aria-label="Add one or more photos"
+                          onChange={handleFileSelection}
+                        />
+                      </label>
                     )}
                     <button className="icon-button" type="button" onClick={clearQueue} aria-label="Clear selected photos">
                       <Trash2 size={18} />
@@ -706,14 +738,6 @@ export function CleanerApp() {
                 ))}
               </ul>
 
-              {canAddFiles && (
-                <p className="queue-add-hint">
-                  <span className="desktop-drop-copy">Drop more photos anywhere in this workspace, or choose Add photos.</span>
-                  <span className="mobile-picker-copy">Choose Add photos to select more from your device.</span>
-                  <small>{remainingSlots} {remainingSlots === 1 ? "slot" : "slots"} left in this batch</small>
-                </p>
-              )}
-
               <div className="queue-actions">
                 {isRunning ? (
                   <button className="secondary-button danger" type="button" onClick={cancelProcessing}>
@@ -744,7 +768,7 @@ export function CleanerApp() {
 
           <div className="privacy-row">
             <ShieldCheck size={18} />
-            <p><strong>Private by design.</strong> Files stay on your device from selection to download.</p>
+            <p>Photos never leave this device.</p>
           </div>
         </section>
 
@@ -755,12 +779,6 @@ export function CleanerApp() {
           </div>
         )}
 
-        {(runtimeStatus.provider === "wasm" || (!runtimeStatus.provider && !hasWebGpu)) && (
-          <div className="compatibility-note">
-            <Cpu size={17} />
-            <span>WebAssembly compatibility mode stays private, but may take longer. A current desktop Chrome or Edge is best for larger batches.</span>
-          </div>
-        )}
       </section>
 
       {preview && (
@@ -794,64 +812,51 @@ export function CleanerApp() {
 
       <section className="steps-section" id="how-it-works" aria-labelledby="steps-heading">
         <div className="section-heading centered-heading">
-          <span className="section-kicker">CLEAR BY DESIGN</span>
-          <h2 id="steps-heading">Three steps. Nothing leaves your device.</h2>
-          <p>The original stays untouched. You receive a new lossless PNG only after every safety check passes.</p>
+          <h2 id="steps-heading">Choose. Clean. Download.</h2>
         </div>
         <div className="step-grid">
           <article>
             <span className="step-number">01</span><div className="step-icon"><Images size={22} /></div>
-            <h3>Choose your photos</h3>
-            <p>Select one image or a whole camera folder. JPG, JPEG, and opaque PNG files are supported.</p>
+            <h3>Choose photos</h3>
+            <p>JPG or PNG. One or many.</p>
           </article>
           <article>
             <span className="step-number">02</span><div className="step-icon"><Sparkles size={22} /></div>
-            <h3>Reconstruct locally</h3>
-            <p>The camera-specific detector finds the eight orange glyphs, then LaMa rebuilds only their masked area.</p>
+            <h3>Remove dates</h3>
+            <p>Runs on your device.</p>
           </article>
           <article>
             <span className="step-number">03</span><div className="step-icon"><Download size={22} /></div>
-            <h3>Download verified PNGs</h3>
-            <p>Single photos download directly. Batches are packaged as one PNG-only ZIP after processing.</p>
+            <h3>Download</h3>
+            <p>PNG or ZIP, automatically.</p>
           </article>
         </div>
       </section>
 
       <section className="privacy-section" id="privacy" aria-labelledby="privacy-heading">
         <div className="privacy-card">
+          <span className="privacy-symbol"><LockKeyhole size={24} /></span>
           <div className="privacy-copy">
-            <span className="privacy-symbol"><LockKeyhole size={26} /></span>
-            <span className="section-kicker">PRIVACY YOU CAN UNDERSTAND</span>
-            <h2 id="privacy-heading">Your photos have nowhere to go.</h2>
-            <p>
-              There is no upload endpoint, account, gallery, analytics tracker, or photo database. Processing happens in a temporary browser worker, and only the verified restoration model may be cached for future visits.
-            </p>
-            <a href="https://github.com/jpattison54319/Sony-Cyber-shot-Date-Removal" target="_blank" rel="noreferrer">
-              Inspect the open-source workflow <ExternalLink size={15} />
-            </a>
+            <h2 id="privacy-heading">Your photos stay here.</h2>
+            <p>No uploads. No accounts. No analytics.</p>
           </div>
-          <ul className="privacy-checks">
-            <li><Check size={17} /><span><strong>No photo uploads</strong>Your files are never sent to this site or a third party.</span></li>
-            <li><Check size={17} /><span><strong>Temporary tab access</strong>Selected files stay available only until you clear the list or close the page.</span></li>
-            <li><Check size={17} /><span><strong>Fail-closed detection</strong>If the supported date is not found confidently, no edit is produced.</span></li>
-            <li><Check size={17} /><span><strong>Exact edit boundary</strong>Every decoded RGB pixel outside the mask must remain unchanged.</span></li>
-          </ul>
+          <a href="https://github.com/jpattison54319/Sony-Cyber-shot-Date-Removal" target="_blank" rel="noreferrer">
+            View source <ExternalLink size={15} />
+          </a>
         </div>
       </section>
 
       <section className="limitation-section" aria-labelledby="limitation-heading">
         <div className="limitation-icon"><FileArchive size={22} /></div>
         <div>
-          <h2 id="limitation-heading">An honest note about restoration</h2>
-          <p>
-            A printed timestamp covered the original scene pixels, so no tool can recover their historical ground truth. This workflow reconstructs that small region and preserves every decoded RGB pixel outside its recorded mask exactly.
-          </p>
+          <h2 id="limitation-heading">Reconstructed, not recovered</h2>
+          <p>The covered area is rebuilt. Pixels outside it stay unchanged.</p>
         </div>
         <a href="https://github.com/jpattison54319/Sony-Cyber-shot-Date-Removal#how-it-works" target="_blank" rel="noreferrer">Technical details <ChevronRight size={15} /></a>
       </section>
 
       <footer>
-        <div className="footer-brand"><span className="brand-mark"><Camera size={18} /></span><span><strong>Date Stamp Cleaner</strong><small>Private, local camera-date removal.</small></span></div>
+        <div className="footer-brand"><span className="brand-mark"><Camera size={18} /></span><strong>Date Stamp Cleaner</strong></div>
         <p>Not affiliated with Sony. Cyber-shot is referenced only to describe compatible camera timestamps.</p>
         <a href="https://github.com/jpattison54319/Sony-Cyber-shot-Date-Removal" target="_blank" rel="noreferrer"><Code2 size={16} /> GitHub</a>
       </footer>

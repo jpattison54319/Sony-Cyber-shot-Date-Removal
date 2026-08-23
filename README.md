@@ -19,7 +19,7 @@ The hidden scene pixels were covered by the camera timestamp and cannot be histo
 
 Photos are decoded and processed in a temporary Web Worker. They are not transmitted, persisted in browser storage, used for training, or logged. Selected file references remain available only in the open tab until the list is cleared or the page is closed.
 
-On first use, the browser downloads the public LaMa ONNX model from a commit-pinned Hugging Face URL. Only that verified model may be cached locally; processing still works if browser storage is unavailable. The model is approximately 198 MiB and must match SHA-256:
+After the first valid photo is chosen, the browser prepares the public LaMa ONNX model in the background and shows its progress. The photo is not involved in that request. Only the model from the commit-pinned Hugging Face URL may be cached locally; processing still works if browser storage is unavailable. The model is approximately 198 MiB and must match SHA-256:
 
 ```text
 4b187e02a5e1eeab97a21ae39a3e780bc9943d64dd90dbaa9ffd73da12da52f0

@@ -25,6 +25,7 @@ export interface ProcessedImage {
 
 export type WorkerRequest =
   | { type: "process"; id: string; file: File; preferWebGpu: boolean }
+  | { type: "prepare-model"; id: string; preferWebGpu: boolean }
   | { type: "clear-model-cache" };
 
 export type ProcessingStage =
@@ -45,5 +46,6 @@ export type WorkerResponse =
       modelVerified?: boolean;
       provider?: ExecutionProvider;
     }
+  | { type: "prepared"; id: string; provider: ExecutionProvider }
   | { type: "result"; id: string; result: ProcessedImage }
   | { type: "error"; id: string; message: string; code: string };
